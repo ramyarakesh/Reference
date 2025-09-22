@@ -2497,3 +2497,63 @@ public class EmailTemplateService {
         return summary;
     }
 }
+
+
+@Data
+public class DiscoveryResults {
+    private int totalServersScanned;
+    private int serversWithCerts;
+    private int totalCertsFound;
+    private Map<String, Integer> certsByType;
+    private List<CertificateLocation> locations;
+    private List<String> scanErrors;
+    private Map<String, Object> metadata;
+}
+
+/**
+ * Certificate inventory details
+ */
+@Data
+public class CertificateInventory {
+    private int totalCertificates;
+    private Map<String, Integer> certsByExpiryCategory;
+    private List<CertificateDetail> certificates;
+    private int truststoreExpiry;
+    private Map<String, Integer> certsByEnvironment;
+    private Map<String, Integer> certsByPurpose;
+}
+
+
+public enum JobStatus {
+    PENDING, RUNNING, COMPLETED, FAILED, CANCELLED, RETRY
+}
+
+public enum StepStatus {
+    PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED
+}
+
+public enum TriggerType {
+    MANUAL, SCHEDULED, API, ONBOARDING
+}
+
+public enum ReportType {
+    ONBOARDING, WEEKLY, ADHOC, RENEWAL
+}
+
+public enum ReportFormat {
+    JSON, HTML
+}
+
+public enum ActionType {
+    CERTIFICATE_EXPIRING, CONNECTION_FAILED, ANSIBLE_FAILED, 
+    CONTAINER_NOT_FOUND, RISK_IDENTIFIED, MANUAL_RENEWAL_NEEDED
+}
+
+public enum Priority {
+    CRITICAL, HIGH, MEDIUM, LOW
+}
+
+public enum ActionStatus {
+    OPEN, IN_PROGRESS, RESOLVED, ESCALATED
+}
+
