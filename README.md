@@ -1,691 +1,376 @@
-<!-- clm-report-email.html -->
-<!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
-<head>
-    <meta charset="UTF-8">
-    <title>CLM Report - [[${csiId}]]</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            margin: 0;
-            padding: 0;
-            background-color: #f4f4f4;
-        }
-        .container {
-            max-width: 800px;
-            margin: 20px auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .header {
-            background-color: #004080;
-            color: white;
-            padding: 20px;
-            border-radius: 8px 8px 0 0;
-            margin: -20px -20px 20px -20px;
-        }
-        .module-section {
-            margin: 20px 0;
-            padding: 15px;
-            border-left: 4px solid #004080;
-            background-color: #f9f9f9;
-        }
-        .summary-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin: 20px 0;
-        }
-        .summary-card {
-            background: #e8f0fe;
-            padding: 15px;
-            border-radius: 4px;
-            text-align: center;
-        }
-        .summary-card .number {
-            font-size: 2em;
-            font-weight: bold;
-            color: #004080;
-        }
-        .critical {
-            background-color: #ffebee;
-            border-color: #d32f2f;
-        }
-        .warning {
-            background-color: #fff3e0;
-            border-color: #f57c00;
-        }
-        .success {
-            background-color: #e8f5e9;
-            border-color: #388e3c;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 15px 0;
-        }
-        th, td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        th {
-            background-color: #004080;
-            color: white;
-        }
-        .action-required {
-            background-color: #ffebee;
-            padding: 15px;
-            border-radius: 4px;
-            margin: 15px 0;
-        }
-        .footer {
-            text-align: center;
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-            color: #666;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Certificate Lifecycle Management Report</h1>
-            <p>CSI: [[${csiId}]] - [[${csiName}]]</p>
-            <p>Report Date: [[${#temporals.format(reportDate, 'MMM dd, yyyy HH:mm')}]]</p>
-        </div>
-        
-        <!-- Summary Section -->
-        <h2>Executive Summary</h2>
-        <div class="summary-grid">
-            <div class="summary-card">
-                <div class="number">[[${summary.totalCertificates}]]</div>
-                <div>Total Certificates</div>
-            </div>
-            <div class="summary-card" th:classappend="${summary.expiringIn30Days > 0} ? 'critical'">
-                <div class="number">[[${summary.expiringIn30Days}]]</div>
-                <div>Expiring in 30 Days</div>
-            </div>
-            <div class="summary-card">
-                <div class="number">[[${summary.totalActions}]]</div>
-                <div>Action Items</div>
-            </div>
-            <div class="summary-card" th:classappend="${summary.criticalActions > 0} ? 'warning'">
-                <div class="number">[[${summary.criticalActions}]]</div>
-                <div>Critical Actions</div>
-            </div>
-        </div>
-        
-        <!-- CLM Module Section -->
-        <div class="module-section" th:if="${clmSection != null && clmSection.included}">
-            <h3>📋 Certificate Lifecycle Management (CLM)</h3>
-            
-            <h4>Discovery Results</h4>
-            <table>
-                <tr>
-                    <th>Type</th>
-                    <th>Servers Scanned</th>
-                    <th>Certificates Found</th>
-                    <th>Status</th>
-                </tr>
-                <tr th:if="${vmDiscovery != null}">
-                    <td>VM Discovery</td>
-                    <td>[[${vmDiscovery.totalServersScanned}]]</td>
-                    <td>[[${vmDiscovery.totalCertsFound}]]</td>
-                    <td><span class="success">✓ Complete</span></td>
-                </tr>
-                <tr th:if="${containerDiscovery != null}">
-                    <td>Container Discovery</td>
-                    <td>[[${containerDiscovery.totalServersScanned}]]</td>
-                    <td>[[${containerDiscovery.totalCertsFound}]]</td>
-                    <td><span class="success">✓ Complete</span></td>
-                </tr>
-            </table>
-            
-            <h4>Certificate Inventory by Expiry</h4>
-            <table>
-                <tr>
-                    <th>Category</th>
-                    <th>Count</th>
-                    <th>Action Required</th>
-                </tr>
-                <tr th:each="entry : ${inventory.certsByExpiryCategory}">
-                    <td>[[${entry.key}]]</td>
-                    <td>[[${entry.value}]]</td>
-                    <td th:switch="${entry.key}">
-                        <span th:case="'EXPIRED'" style="color: #d32f2f;">Immediate renewal required</span>
-                        <span th:case="'30_DAYS'" style="color: #f57c00;">Urgent renewal needed</span>
-                        <span th:case="'60_DAYS'" style="color: #fbc02d;">Plan renewal</span>
-                        <span th:case="*">Monitor</span>
-                    </td>
-                </tr>
-            </table>
-        </div>
-        
-        <!-- BCM Module Section -->
-        <div class="module-section" th:if="${bcmSection != null && bcmSection.included}">
-            <h3>🛡️ Baseline Configuration Monitoring (BCM)</h3>
-            
-            <p><strong>Servers Scanned:</strong> [[${bcmSection.serversScanned}]]</p>
-            <p><strong>Total Exceptions:</strong> [[${bcmSection.exceptionsFound}]]</p>
-            
-            <div th:if="${bcmSection.remediationAttempted > 0}">
-                <h4>Auto-Remediation Results</h4>
-                <p>Attempted: [[${bcmSection.remediationAttempted}]]</p>
-                <p>Successful: [[${bcmSection.remediationSuccessful}]]</p>
-            </div>
-            
-            <h4>Top Exceptions by Type</h4>
-            <table>
-                <tr>
-                    <th>Exception Type</th>
-                    <th>Count</th>
-                </tr>
-                <tr th:each="exception : ${bcmSection.exceptionsByType}">
-                    <td>[[${exception.key}]]</td>
-                    <td>[[${exception.value}]]</td>
-                </tr>
-            </table>
-        </div>
-        
-        <!-- EOVS Module Section -->
-        <div class="module-section" th:if="${eovsSection != null && eovsSection.included}">
-            <h3>🔍 Enterprise Operating Vulnerability Scanner (EOVS)</h3>
-            
-            <p><strong>Total Vulnerabilities:</strong> [[${eovsSection.vulnerabilitiesFound}]]</p>
-            
-            <h4>Vulnerabilities by Severity</h4>
-            <div class="summary-grid">
-                <div class="summary-card critical" th:if="${eovsSection.vulnerabilitiesBySeverity['CRITICAL'] != null}">
-                    <div class="number">[[${eovsSection.vulnerabilitiesBySeverity['CRITICAL']}]]</div>
-                    <div>Critical</div>
-                </div>
-                <div class="summary-card warning" th:if="${eovsSection.vulnerabilitiesBySeverity['HIGH'] != null}">
-                    <div class="number">[[${eovsSection.vulnerabilitiesBySeverity['HIGH']}]]</div>
-                    <div>High</div>
-                </div>
-                <div class="summary-card" th:if="${eovsSection.vulnerabilitiesBySeverity['MEDIUM'] != null}">
-                    <div class="number">[[${eovsSection.vulnerabilitiesBySeverity['MEDIUM']}]]</div>
-                    <div>Medium</div>
-                </div>
-            </div>
-            
-            <div th:if="${eovsSection.pendingAcknowledgment > 0}" class="action-required">
-                <strong>⚠️ User Acknowledgment Required:</strong> 
-                [[${eovsSection.pendingAcknowledgment}]] vulnerabilities pending acknowledgment
-            </div>
-        </div>
-        
-        <!-- Action Items Section -->
-        <div th:if="${!#lists.isEmpty(actionItems)}" class="action-required">
-            <h3>⚡ Action Items Required</h3>
-            <table>
-                <tr>
-                    <th>Priority</th>
-                    <th>Type</th>
-                    <th>Description</th>
-                    <th>Due Date</th>
-                </tr>
-                <tr th:each="item : ${actionItems}" 
-                    th:classappend="${item.priority == 'CRITICAL'} ? 'critical-row'">
-                    <td>[[${item.priority}]]</td>
-                    <td>[[${item.type}]]</td>
-                    <td>[[${item.description}]]</td>
-                    <td>[[${#temporals.format(item.dueDate, 'MMM dd, yyyy')}]]</td>
-                </tr>
-            </table>
-        </div>
-        
-        <div class="footer">
-            <p>This is an automated report generated by the CLM system.</p>
-            <p>For questions, please contact the CLM support team.</p>
-        </div>
-    </div>
-</body>
-</html>
 
+private void validateMandatoryFields(CsiOnboardingRequest request) { if (request.getCsiId() == null || request.getRequestorSoeid() == null || request.getEmailDl() == null || request.getEmail() == null || request.getPreferredRenewal() == null || request.getNotificationEmailList() == null) { throw new ValidationException("Missing mandatory fields for CSI onboarding"); } }
 
+private void validateModuleSubscriptions(List<ModuleSubscriptionRequest> subscriptions) { // Ensure at least one module is selected boolean hasSelection = subscriptions.stream() .anyMatch(ModuleSubscriptionRequest::isSelected); if (!hasSelection) { throw new ValidationException("At least one module must be selected"); } // Validate module-specific configurations for (ModuleSubscriptionRequest subscription : subscriptions) { if (subscription.isSelected()) { validateModuleConfiguration(subscription); } } }
 
-GET /api/v1/clm/csi/{csiId}/sync-status
+package com.citi.cert_management.container.dto;
 
-{
-  "csiId": "CSI123",
-  "serverSyncStatus": {
-    "state": "COMPLETED",
-    "lastSuccess": "2025-09-22T10:00:00",
-    "recordsProcessed": 50
-  },
-  "certificateSyncStatus": {
-    "state": "COMPLETED",
-    "recordsProcessed": 25
-  },
-  "repositorySyncStatus": {
-    "state": "COMPLETED",
-    "recordsProcessed": 3
-  },
-  "canProceedWithDiscovery": true
-}
-
-Execute Module Operation
-POST /api/v1/clm/csi/{csiId}/module/{moduleType}/execute
-Get Consolidated Report
-GET /api/v1/clm/csi/{csiId}/consolidated-report?format=JSON
-
-Job Management
-Get Job Status
-GET /api/v1/clm/jobs/{jobId}/status
-Perform Adhoc Scan
-POST /api/v1/clm/csi/{csiId}/adhoc-scan
-
-
-
-# CLM (Certificate Lifecycle Management) System Architecture
-
-## Overview
-The CLM system provides comprehensive certificate lifecycle management for both VM and container environments. It automates discovery, assessment, renewal, and deployment of certificates while maintaining audit trails and generating reports.
-
-## Key Components
-
-### 1. Job Orchestration
-- **Spring State Machine**: Manages job state transitions
-- **Async Processing**: Non-blocking job execution
-- **Database Tracking**: Persistent job status storage
-- **ECS Compatible**: Designed for multi-instance deployment
-
-### 2. Discovery Services
-- **VM Discovery**: Ansible playbook integration for server scanning
-- **Container Discovery**: Repository scanning and Vault integration
-- **Batch Processing**: Weekly scheduled scans
-- **Adhoc Scanning**: On-demand discovery operations
-
-### 3. Certificate Management
-- **Multiple Formats**: Support for all certificate formats
-- **Vault Integration**: Container certificate storage
-- **MongoDB Storage**: VM certificate persistence
-- **Auto-renewal**: Configurable automatic renewal
-
-### 4. Repository Integration
-- **Bitbucket Support**: Clone, commit, PR creation
-- **GitHub Support**: Full Git operations
-- **Certificate Deployment**: Automated certificate updates
-- **Version Control**: Complete audit trail
-
-### 5. Reporting & Notifications
-- **HTML Email Reports**: Comprehensive scan results
-- **JSON API Reports**: Programmatic access
-- **Escalation Management**: Automatic escalation after 1 month
-- **Historical Reports**: 3-month retention minimum
-
-## API Endpoints
-
-### CSI Management
-- `POST /api/v1/clm/csi/onboard` - Onboard new CSI
-- `PUT /api/v1/clm/csi/{csiId}` - Update CSI configuration
-
-### Discovery Operations
-- `POST /api/v1/clm/csi/{csiId}/vm-discovery` - Trigger VM discovery
-- `POST /api/v1/clm/csi/{csiId}/container-discovery` - Trigger container discovery
-- `POST /api/v1/clm/csi/{csiId}/adhoc-scan` - Perform adhoc scan
-
-### Certificate Operations
-- `POST /api/v1/clm/csi/{csiId}/renewal` - Initiate renewal
-- `POST /api/v1/clm/csi/{csiId}/impact-assessment` - Run assessment
-
-### Reporting
-- `GET /api/v1/clm/reports/{jobId}` - Get job report
-- `GET /api/v1/clm/csi/{csiId}/inventory-report` - Get inventory
-- `GET /api/v1/clm/reports/search` - Search historical reports
-
-### Job Tracking
-- `GET /api/v1/clm/jobs/{jobId}/status` - Get job status
-- `GET /api/v1/clm/csi/{csiId}/action-items` - Get action items
-
-## Data Flow
-
-1. **Onboarding**: CSI registered → Initial scan triggered
-2. **Discovery**: VMs/Containers scanned → Certificates identified
-3. **Assessment**: Impact analyzed → Risks identified
-4. **Action Items**: Issues tracked → Escalations managed
-5. **Renewal**: Certificates renewed → Deployed to repos
-6. **Reporting**: Results compiled → Emails sent
-
-## Integration Points
-
-### External Systems
-- **Ansible**: Playbook execution via REST API
-- **Vault**: Certificate storage and retrieval
-- **Bitbucket/GitHub**: Repository operations
-- **MongoDB**: Data persistence
-- **SMTP**: Email notifications (via Ansible)
-
-### Security Considerations
-- **Authentication**: PID username/password for repos
-- **Encryption**: Sensitive data encrypted at rest
-- **Audit Trail**: Complete operation logging
-- **Access Control**: Role-based permissions
-
-## Configuration
-
-### Mandatory User Inputs
-- `csiId`: Unique CSI identifier
-- `requestorSoeid`: Requestor's SOEID
-- `emailDl`: Primary email distribution list
-- `email`: Contact email address
-- `preferredRenewal`: Renewal provider preference
-- `notificationEmailList`: Notification recipients
-- `escalationMatrix`: Escalation contacts
-
-### Optional Configuration
-- Repository URLs (Bitbucket/GitHub)
-- Auto-deployment settings
-- Discovery schedules
-- Custom thresholds
-
-## Error Handling
-
-- **Retry Logic**: Configurable retry for failed operations
-- **Dead Letter Queue**: Failed jobs tracked
-- **Graceful Degradation**: Partial failures handled
-- **Comprehensive Logging**: Full error details captured
-
-## Monitoring
-
-- **Job Metrics**: Success/failure rates
-- **Performance Tracking**: Execution times
-- **Resource Usage**: Memory/CPU monitoring
-- **Alert Thresholds**: Configurable alerts
-
-package com.citi.cert_management.container.service;
-
-import org.springframework.stereotype.Service;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import lombok.Data;
+import lombok.Builder;
+import javax.validation.constraints.NotNull;
 import java.util.*;
 
 /**
- * Service for handling email notifications via Ansible playbooks
- * Integrates with existing notification infrastructure
+ * Request DTOs
  */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class NotificationService {
-    
-    private final AnsibleService ansibleService;
-    private final EmailTemplateService templateService;
-    private final ClmReportRepository reportRepository;
-    
-    /**
-     * Sends job completion notification with CLM report
-     * 
-     * @param job Completed CLM job
-     */
-    public void sendJobCompletionNotification(ClmJob job) {
-        log.info("Sending completion notification for job: {}", job.getJobId());
-        
-        try {
-            // Get report
-            ClmReport report = reportRepository.findByJobId(job.getJobId())
-                .orElseThrow(() -> new ReportNotFoundException("Report not found for job: " + job.getJobId()));
-            
-            // Get CSI details
-            CsiDetails csi = csiRepository.findByCsiId(job.getCsiId())
-                .orElseThrow(() -> new CsiNotFoundException("CSI not found: " + job.getCsiId()));
-            
-            // Generate email content
-            String htmlContent = templateService.generateReportEmail(report, csi);
-            
-            // Prepare email parameters
-            Map<String, Object> emailParams = new HashMap<>();
-            emailParams.put("to", csi.getEmailDl());
-            emailParams.put("cc", String.join(",", csi.getNotificationEmailList()));
-            emailParams.put("subject", generateSubject(job, report));
-            emailParams.put("body", htmlContent);
-            emailParams.put("contentType", "text/html");
-            
-            // Send via Ansible playbook
-            sendEmail(emailParams);
-            
-            // Mark report as emailed
-            report.setEmailSent(true);
-            report.setEmailSentAt(LocalDateTime.now());
-            reportRepository.save(report);
-            
-        } catch (Exception e) {
-            log.error("Failed to send completion notification for job: {}", job.getJobId(), e);
-        }
-    }
-    
-    /**
-     * Sends escalation email for unresolved action items
-     * 
-     * @param csi CSI details
-     * @param unresolvedItems List of unresolved action items
-     */
-    public void sendEscalationEmail(CsiDetails csi, List<ActionItem> unresolvedItems) {
-        log.info("Sending escalation email for CSI: {} with {} unresolved items", 
-                csi.getCsiId(), unresolvedItems.size());
-        
-        try {
-            // Generate escalation email content
-            String htmlContent = templateService.generateEscalationEmail(csi, unresolvedItems);
-            
-            // Prepare recipients - include escalation matrix
-            List<String> toRecipients = new ArrayList<>();
-            toRecipients.add(csi.getEmailDl());
-            toRecipients.addAll(csi.getEscalationMatrix());
-            
-            Map<String, Object> emailParams = new HashMap<>();
-            emailParams.put("to", String.join(",", toRecipients));
-            emailParams.put("cc", String.join(",", csi.getNotificationEmailList()));
-            emailParams.put("subject", "ESCALATION: Unresolved CLM Action Items - " + csi.getCsiId());
-            emailParams.put("body", htmlContent);
-            emailParams.put("contentType", "text/html");
-            emailParams.put("priority", "high");
-            
-            // Send via Ansible playbook
-            sendEmail(emailParams);
-            
-        } catch (Exception e) {
-            log.error("Failed to send escalation email for CSI: {}", csi.getCsiId(), e);
-        }
-    }
-    
-    /**
-     * Sends critical alert notification
-     */
-    public void sendCriticalAlert(CsiDetails csi, String alertMessage, ActionItem criticalItem) {
-        if (!csi.isCriticalAlertsOnly()) {
-            return;
-        }
-        
-        log.info("Sending critical alert for CSI: {}", csi.getCsiId());
-        
-        Map<String, Object> emailParams = new HashMap<>();
-        emailParams.put("to", csi.getEmailDl());
-        emailParams.put("cc", String.join(",", csi.getNotificationEmailList()));
-        emailParams.put("subject", "CRITICAL: " + alertMessage + " - " + csi.getCsiId());
-        emailParams.put("body", generateCriticalAlertBody(csi, criticalItem));
-        emailParams.put("contentType", "text/html");
-        emailParams.put("priority", "urgent");
-        
-        sendEmail(emailParams);
-    }
-    
-    /**
-     * Core email sending method using Ansible playbook
-     * Based on the attached notification service pattern
-     */
-    private void sendEmail(Map<String, Object> params) {
-        try {
-            // Prepare Ansible playbook parameters
-            Map<String, Object> playbookParams = new HashMap<>();
-            playbookParams.put("email_to", params.get("to"));
-            playbookParams.put("email_cc", params.get("cc"));
-            playbookParams.put("email_subject", params.get("subject"));
-            playbookParams.put("email_body", params.get("body"));
-            playbookParams.put("email_content_type", params.get("contentType"));
-            
-            // Execute Ansible playbook
-            AnsibleResponse response = ansibleService.executePlaybook(
-                "send_notification_email.yml", 
-                playbookParams
-            );
-            
-            if (!response.isSuccess()) {
-                throw new NotificationException("Ansible playbook execution failed: " + 
-                    response.getErrorMessage());
-            }
-            
-            log.info("Email sent successfully via Ansible playbook");
-            
-        } catch (Exception e) {
-            log.error("Failed to send email notification", e);
-            throw new NotificationException("Email sending failed", e);
-        }
-    }
-    
-    private String generateSubject(ClmJob job, ClmReport report) {
-        String prefix = job.getJobType() == JobType.ONBOARDING_SCAN ? "Onboarding Complete" : "CLM Report";
-        int actionCount = report.getActionItems().size();
-        
-        if (actionCount > 0) {
-            return String.format("%s - %s - %d Action Items Required", 
-                prefix, job.getCsiId(), actionCount);
-        }
-        
-        return String.format("%s - %s", prefix, job.getCsiId());
-    }
+@Data
+public class CsiOnboardingRequest {
+    @NotNull
+    private String csiId;
+   
+    @NotNull
+    private String requestorSoeid;
+   
+    @NotNull
+    private String emailDl;
+   
+    @NotNull
+    private String email;
+   
+    @NotNull
+    private String preferredRenewal;
+   
+    private List<String> notificationEmailList;
+    private List<String> escalationMatrix;
+   
+    private String bitbucketProjectUrl;
+    private String githubProjectUrl;
+   
+    private boolean vmDiscoveryEnabled;
+    private boolean containerDiscoveryEnabled;
+    private boolean autoDeploymentEnabled;
+   
+    private Map<String, Object> additionalConfig;
 }
 
+@Data
+public class RenewalRequest {
+    @NotNull
+    private String certificateId;
+   
+    private String renewalProvider;
+    private boolean autoRenewal;
+    private Map<String, String> certificateAttributes;
+    private LocalDateTime requestedExpiryDate;
+}
 
+@Data
+public class DeploymentRequest {
+    private List<String> targetPaths;
+    private String branchName;
+    private String commitMessage;
+    private boolean createPullRequest;
+    private List<String> reviewers;
+}
 
-package com.citi.cert_management.container.service;
+/**
+ * Response DTOs
+ */
+@Data
+@Builder
+public class OnboardingResponse {
+    private String csiId;
+    private String jobId;
+    private String message;
+    private LocalDateTime timestamp;
+}
 
-import org.springframework.stereotype.Service;
-import org.thymeleaf.TemplateEngine;
-import org.thymeleaf.context.Context;
+@Data
+@Builder
+public class JobResponse {
+    private String jobId;
+    private String message;
+    private JobStatus status;
+    private LocalDateTime estimatedCompletion;
+}
+
+@Data
+@Builder
+public class JobStatusResponse {
+    private String jobId;
+    private JobStatus status;
+    private double progress;
+    private String currentStep;
+    private LocalDateTime startTime;
+    private LocalDateTime estimatedCompletion;
+    private List<StepProgress> steps;
+    private Map<String, Object> metadata;
+}
+
+@Data
+@Builder
+public class RenewalResponse {
+    private String renewalId;
+    private String status;
+    private String message;
+    private String newCertificateId;
+    private LocalDateTime expiryDate;
+}
+
+@Data
+@Builder
+public class ClmReportResponse {
+    private String reportId;
+    private Object content;
+    private ReportFormat format;
+    private LocalDateTime generatedAt;
+}
+
+@Data
+@Builder
+public class InventoryReport {
+    private String csiId;
+    private int totalCertificates;
+    private Map<String, Integer> certsByCategory;
+    private List<CertificateSummary> expiringCertificates;
+    private List<ActionItemSummary> actionItems;
+    private LocalDateTime reportDate;
+}
+
+@Data
+@Builder
+public class DeploymentResult {
+    private boolean success;
+    private String pullRequestUrl;
+    private String pullRequestId;
+    private String message;
+    private String errorMessage;
+    private Map<String, Object> metadata;
+}
+
+package com.citi.cert_management.container.controller;
+
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import javax.validation.Valid;
 import java.util.*;
 
 /**
- * Service for generating HTML email content for CLM reports
- * Uses Thymeleaf templates for formatting
+ * REST controller for Certificate Lifecycle Management operations
+ * Provides endpoints for CSI onboarding, discovery, assessment, and reporting
  */
 @Slf4j
-@Service
+@RestController
+@RequestMapping("/api/v1/clm")
 @RequiredArgsConstructor
-public class EmailTemplateService {
+@Tag(name = "CLM API", description = "Certificate Lifecycle Management operations")
+public class ClmController {
     
-    private final TemplateEngine templateEngine;
+    private final ClmService clmService;
+    private final CsiService csiService;
+    private final ReportService reportService;
     
     /**
-     * Generates HTML email content for CLM report
+     * Enhanced CSI onboarding with CLM configuration
      * 
-     * @param report CLM report data
-     * @param csi CSI details
-     * @return HTML content for email
+     * @param request CSI onboarding request with mandatory fields
+     * @return ResponseEntity with onboarding result and job ID
      */
-    public String generateReportEmail(ClmReport report, CsiDetails csi) {
-        Context context = new Context();
+    @PostMapping("/csi/onboard")
+    @Operation(summary = "Onboard CSI with CLM configuration",
+              description = "Creates CSI profile and initiates onboarding scan")
+    public ResponseEntity<OnboardingResponse> onboardCsi(@Valid @RequestBody CsiOnboardingRequest request) {
+        log.info("Onboarding CSI: {}", request.getCsiId());
         
-        // Set basic information
-        context.setVariable("csiId", csi.getCsiId());
-        context.setVariable("csiName", csi.getCsiName());
-        context.setVariable("reportDate", report.getGeneratedAt());
-        context.setVariable("reportType", report.getReportType());
+        validateMandatoryFields(request);
         
-        // Set discovery results
-        context.setVariable("vmDiscovery", report.getVmDiscoveryResults());
-        context.setVariable("containerDiscovery", report.getContainerDiscoveryResults());
+        // Save CSI details
+        CsiDetails csi = csiService.createCsi(request);
         
-        // Set certificate inventory
-        context.setVariable("inventory", report.getInventory());
-        context.setVariable("expiringCerts", getExpiringCertificates(report));
+        // Initiate onboarding scan
+        String jobId = clmService.performOnboardingScan(csi.getCsiId(), request.getRequestorSoeid());
         
-        // Set assessment results
-        context.setVariable("impactAssessment", report.getImpactAssessment());
-        context.setVariable("riskAssessment", report.getRiskAssessment());
-        
-        // Set action items
-        context.setVariable("actionItems", report.getActionItems());
-        context.setVariable("criticalActions", getCriticalActions(report));
-        
-        // Generate summary statistics
-        context.setVariable("summary", generateSummary(report));
-        
-        return templateEngine.process("clm-report-email", context);
+        return ResponseEntity.ok(OnboardingResponse.builder()
+            .csiId(csi.getCsiId())
+            .jobId(jobId)
+            .message("CSI onboarded successfully. Scan initiated.")
+            .build());
     }
     
     /**
-     * Generates escalation email for unresolved items
-     * 
-     * @param csi CSI details
-     * @param unresolvedItems List of unresolved action items
-     * @return HTML content for escalation email
+     * Triggers VM discovery for a CSI
      */
-    public String generateEscalationEmail(CsiDetails csi, List<ActionItem> unresolvedItems) {
-        Context context = new Context();
+    @PostMapping("/csi/{csiId}/vm-discovery")
+    @Operation(summary = "Trigger VM certificate discovery")
+    public ResponseEntity<JobResponse> triggerVmDiscovery(
+            @PathVariable String csiId,
+            @RequestParam(required = false) String triggeredBy) {
         
-        context.setVariable("csiId", csi.getCsiId());
-        context.setVariable("csiName", csi.getCsiName());
-        context.setVariable("escalationDate", LocalDateTime.now());
-        context.setVariable("unresolvedItems", unresolvedItems);
-        context.setVariable("itemCount", unresolvedItems.size());
-        context.setVariable("oldestItem", getOldestItem(unresolvedItems));
+        String jobId = clmService.initiateJob(csiId, JobType.VM_DISCOVERY, 
+                                            triggeredBy, Collections.emptyMap());
         
-        // Group items by type
-        Map<ActionType, List<ActionItem>> itemsByType = unresolvedItems.stream()
-            .collect(Collectors.groupingBy(ActionItem::getType));
-        context.setVariable("itemsByType", itemsByType);
-        
-        return templateEngine.process("escalation-email", context);
+        return ResponseEntity.ok(new JobResponse(jobId, "VM discovery initiated"));
     }
     
     /**
-     * Generates onboarding completion email
+     * Triggers container discovery for a CSI
      */
-    public String generateOnboardingEmail(CsiDetails csi, ClmReport report) {
-        Context context = new Context();
+    @PostMapping("/csi/{csiId}/container-discovery")
+    @Operation(summary = "Trigger container certificate discovery")
+    public ResponseEntity<JobResponse> triggerContainerDiscovery(
+            @PathVariable String csiId,
+            @RequestParam(required = false) String triggeredBy) {
         
-        context.setVariable("csi", csi);
-        context.setVariable("onboardingDate", LocalDateTime.now());
-        context.setVariable("discoveryResults", combineDiscoveryResults(report));
-        context.setVariable("nextSteps", generateNextSteps(csi, report));
+        String jobId = clmService.initiateJob(csiId, JobType.CONTAINER_DISCOVERY, 
+                                            triggeredBy, Collections.emptyMap());
         
-        return templateEngine.process("onboarding-complete-email", context);
+        return ResponseEntity.ok(new JobResponse(jobId, "Container discovery initiated"));
     }
     
-    private Map<String, Object> generateSummary(ClmReport report) {
-        Map<String, Object> summary = new HashMap<>();
+    /**
+     * Performs impact assessment on discovered certificates
+     */
+    @PostMapping("/csi/{csiId}/impact-assessment")
+    @Operation(summary = "Run certificate impact assessment")
+    public ResponseEntity<JobResponse> runImpactAssessment(
+            @PathVariable String csiId,
+            @RequestParam String jobId) {
         
-        // Certificate counts
-        summary.put("totalCertificates", report.getInventory().getTotalCertificates());
-        summary.put("expiringIn30Days", report.getInventory().getCertsByExpiryCategory().get("30_DAYS"));
-        summary.put("expiringIn60Days", report.getInventory().getCertsByExpiryCategory().get("60_DAYS"));
-        summary.put("expiringIn90Days", report.getInventory().getCertsByExpiryCategory().get("90_DAYS"));
+        Map<String, Object> params = new HashMap<>();
+        params.put("discoveryJobId", jobId);
         
-        // Discovery statistics
-        summary.put("vmServersScanned", report.getVmDiscoveryResults().getTotalServersScanned());
-        summary.put("containersScanned", report.getContainerDiscoveryResults().getTotalServersScanned());
+        String assessmentJobId = clmService.initiateJob(csiId, JobType.IMPACT_ASSESSMENT, 
+                                                      "system", params);
         
-        // Action items
-        long criticalActions = report.getActionItems().stream()
-            .filter(item -> item.getPriority() == Priority.CRITICAL)
-            .count();
-        summary.put("criticalActions", criticalActions);
-        summary.put("totalActions", report.getActionItems().size());
+        return ResponseEntity.ok(new JobResponse(assessmentJobId, "Impact assessment initiated"));
+    }
+    
+    /**
+     * Initiates certificate renewal process
+     */
+    @PostMapping("/csi/{csiId}/renewal")
+    @Operation(summary = "Initiate certificate renewal")
+    public ResponseEntity<RenewalResponse> initiateCertificateRenewal(
+            @PathVariable String csiId,
+            @Valid @RequestBody RenewalRequest request) {
         
-        return summary;
+        RenewalResult result = clmService.processCertificateRenewal(csiId, 
+                                                                   request.getCertificateId(), 
+                                                                   request);
+        
+        return ResponseEntity.ok(RenewalResponse.builder()
+            .renewalId(result.getRenewalId())
+            .status(result.getStatus())
+            .message(result.getMessage())
+            .build());
+    }
+    
+    /**
+     * Generates inventory report for a CSI
+     */
+    @GetMapping("/csi/{csiId}/inventory-report")
+    @Operation(summary = "Generate certificate inventory report")
+    public ResponseEntity<InventoryReport> getInventoryReport(
+            @PathVariable String csiId,
+            @RequestParam(defaultValue = "JSON") ReportFormat format) {
+        
+        ClmReport report = reportService.generateInventoryReport(csiId, format);
+        
+        return ResponseEntity.ok(convertToInventoryReport(report));
+    }
+    
+    /**
+     * Retrieves job status and progress
+     */
+    @GetMapping("/jobs/{jobId}/status")
+    @Operation(summary = "Get job execution status")
+    public ResponseEntity<JobStatusResponse> getJobStatus(@PathVariable String jobId) {
+        
+        JobStatusResponse status = clmService.getJobStatus(jobId);
+        
+        return ResponseEntity.ok(status);
+    }
+    
+    /**
+     * Retrieves CLM report by job ID
+     */
+    @GetMapping("/reports/{jobId}")
+    @Operation(summary = "Get CLM report for completed job")
+    public ResponseEntity<ClmReportResponse> getReport(
+            @PathVariable String jobId,
+            @RequestParam(defaultValue = "JSON") ReportFormat format) {
+        
+        ClmReport report = reportService.getReportByJobId(jobId, format);
+        
+        if (format == ReportFormat.HTML) {
+            return ResponseEntity.ok()
+                .header("Content-Type", "text/html")
+                .body(new ClmReportResponse(report.getReportId(), report.getHtmlContent()));
+        }
+        
+        return ResponseEntity.ok(new ClmReportResponse(report.getReportId(), report.getRawData()));
+    }
+    
+    /**
+     * Triggers adhoc scan for a CSI
+     */
+    @PostMapping("/csi/{csiId}/adhoc-scan")
+    @Operation(summary = "Perform adhoc certificate scan")
+    public ResponseEntity<JobResponse> performAdhocScan(
+            @PathVariable String csiId,
+            @RequestParam String triggeredBy) {
+        
+        String jobId = clmService.performAdhocScan(csiId, triggeredBy);
+        
+        return ResponseEntity.ok(new JobResponse(jobId, "Adhoc scan initiated"));
+    }
+    
+    /**
+     * Searches historical reports
+     */
+    @GetMapping("/reports/search")
+    @Operation(summary = "Search historical CLM reports")
+    public ResponseEntity<List<ReportSummary>> searchReports(
+            @RequestParam(required = false) String csiId,
+            @RequestParam(required = false) LocalDateTime startDate,
+            @RequestParam(required = false) LocalDateTime endDate,
+            @RequestParam(required = false) ReportType reportType) {
+        
+        List<ClmReport> reports = reportService.searchReports(csiId, startDate, endDate, reportType);
+        
+        return ResponseEntity.ok(convertToReportSummaries(reports));
+    }
+    
+    /**
+     * Updates CSI configuration
+     */
+    @PutMapping("/csi/{csiId}")
+    @Operation(summary = "Update CSI CLM configuration")
+    public ResponseEntity<CsiDetails> updateCsiConfig(
+            @PathVariable String csiId,
+            @Valid @RequestBody CsiUpdateRequest request) {
+        
+        CsiDetails updated = csiService.updateCsi(csiId, request);
+        
+        return ResponseEntity.ok(updated);
+    }
+    
+    /**
+     * Gets action items for a CSI
+     */
+    @GetMapping("/csi/{csiId}/action-items")
+    @Operation(summary = "Get pending action items for CSI")
+    public ResponseEntity<List<ActionItem>> getActionItems(
+            @PathVariable String csiId,
+            @RequestParam(defaultValue = "OPEN") ActionStatus status) {
+        
+        List<ActionItem> items = clmService.getActionItems(csiId, status);
+        
+        return ResponseEntity.ok(items);
+    }
+    
+    private void validateMandatoryFields(CsiOnboardingRequest request) {
+        if (request.getCsiId() == null || request.getRequestorSoeid() == null ||
+            request.getEmailDl() == null || request.getEmail() == null ||
+            request.getPreferredRenewal() == null || request.getNotificationEmailList() == null) {
+            throw new ValidationException("Missing mandatory fields for CSI onboarding");
+        }
     }
 }
-
 
 
 package com.citi.cert_management.container.service;
@@ -915,7 +600,6 @@ public class ClmService {
 }
 
 
-
 package com.citi.cert_management.container.service;
 
 import org.springframework.statemachine.StateMachine;
@@ -1110,354 +794,260 @@ public class JobResult {
     private Map<String, Object> metadata;
 }
 
+package com.citi.cert_management.container.model;
 
-
-Test
-
-package com.citi.cert_management.container.e2e;
-
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
-
-/**
- * End-to-end test scenarios
- */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("e2e")
-@DisplayName("CLM System E2E Tests")
-class ClmSystemE2ETest {
-    
-    @LocalServerPort
-    private int port;
-    
-    @Autowired
-    private TestRestTemplate restTemplate;
-    
-    @Test
-    @DisplayName("Complete onboarding flow with all modules")
-    void testCompleteOnboardingFlow() {
-        // Step 1: Onboard CSI
-        EnhancedCsiOnboardingRequest onboardRequest = 
-            new CsiOnboardingRequestBuilder()
-                .withCsiId("E2E-TEST-001")
-                .withModules(ModuleType.CLM, ModuleType.BCM, ModuleType.EOVS)
-                .withBcmAutoRemediation()
-                .withRepositories(
-                    "https://bitbucket.test.com/e2e/repo",
-                    "https://github.com/test/e2e-repo"
-                )
-                .build();
-        
-        ResponseEntity<OnboardingResponse> onboardResponse = restTemplate.postForEntity(
-            "/api/v1/clm/csi/onboard",
-            onboardRequest,
-            OnboardingResponse.class
-        );
-        
-        assertThat(onboardResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        String jobId = onboardResponse.getBody().getJobId();
-        
-        // Step 2: Wait for sync completion
-        await().atMost(30, TimeUnit.SECONDS).until(() -> {
-            ResponseEntity<SyncStatusResponse> syncStatus = restTemplate.getForEntity(
-                "/api/v1/clm/csi/{csiId}/sync-status",
-                SyncStatusResponse.class,
-                "E2E-TEST-001"
-            );
-            
-            return syncStatus.getBody().isCanProceedWithDiscovery();
-        });
-        
-        // Step 3: Wait for job completion
-        await().atMost(60, TimeUnit.SECONDS).until(() -> {
-            ResponseEntity<JobStatusResponse> jobStatus = restTemplate.getForEntity(
-                "/api/v1/clm/jobs/{jobId}/status",
-                JobStatusResponse.class,
-                jobId
-            );
-            
-            return jobStatus.getBody().getStatus() == JobStatus.COMPLETED;
-        });
-        
-        // Step 4: Verify consolidated report
-        ResponseEntity<ConsolidatedReport> reportResponse = restTemplate.getForEntity(
-            "/api/v1/clm/csi/{csiId}/consolidated-report?jobId={jobId}",
-            ConsolidatedReport.class,
-            "E2E-TEST-001",
-            jobId
-        );
-        
-        ConsolidatedReport report = reportResponse.getBody();
-        assertThat(report.getClmSection().isIncluded()).isTrue();
-        assertThat(report.getBcmSection().isIncluded()).isTrue();
-        assertThat(report.getEovsSection().isIncluded()).isTrue();
-        assertThat(report.getConsolidatedActionItems()).isNotEmpty();
-    }
-    
-    @Test
-    @DisplayName("BCM remediation workflow")
-    void testBcmRemediationWorkflow() {
-        // Setup: Create CSI with BCM exceptions
-        String csiId = setupCsiWithBcmExceptions();
-        
-        // Step 1: Run BCM scan
-        ResponseEntity<JobResponse> scanResponse = restTemplate.postForEntity(
-            "/api/v1/clm/csi/{csiId}/module/{moduleType}/execute",
-            new ModuleOperationRequest("SCAN"),
-            JobResponse.class,
-            csiId,
-            ModuleType.BCM
-        );
-        
-        String scanJobId = scanResponse.getBody().getJobId();
-        waitForJobCompletion(scanJobId);
-        
-        // Step 2: Get BCM report
-        ResponseEntity<ConsolidatedReport> reportResponse = restTemplate.getForEntity(
-            "/api/v1/clm/csi/{csiId}/consolidated-report?jobId={jobId}",
-            ConsolidatedReport.class,
-            csiId,
-            scanJobId
-        );
-        
-        BcmReportSection bcmReport = reportResponse.getBody().getBcmSection();
-        assertThat(bcmReport.getExceptionsFound()).isGreaterThan(0);
-        
-        // Step 3: Trigger remediation
-        BcmRemediationRequest remediationRequest = new BcmRemediationRequest();
-        remediationRequest.setExceptionIds(
-            bcmReport.getTopExceptions().stream()
-                .map(BcmExceptionSummary::getExceptionId)
-                .collect(Collectors.toList())
-        );
-        remediationRequest.setApprovedBy("e2e-tester");
-        remediationRequest.setReason("E2E test remediation");
-        
-        ResponseEntity<RemediationResponse> remediationResponse = 
-            restTemplate.postForEntity(
-                "/api/v1/clm/csi/{csiId}/bcm/remediate",
-                remediationRequest,
-                RemediationResponse.class,
-                csiId
-            );
-        
-        assertThat(remediationResponse.getBody().isSuccess()).isTrue();
-    }
-    
-    @Test
-    @DisplayName("Certificate expiry and renewal workflow")
-    void testCertificateRenewalWorkflow() {
-        // Setup: Create CSI with expiring certificates
-        String csiId = setupCsiWithExpiringCertificates();
-        
-        // Step 1: Run CLM discovery
-        ResponseEntity<JobResponse> discoveryResponse = restTemplate.postForEntity(
-            "/api/v1/clm/csi/{csiId}/module/{moduleType}/execute",
-            new ModuleOperationRequest("DISCOVER"),
-            JobResponse.class,
-            csiId,
-            ModuleType.CLM
-        );
-        
-        waitForJobCompletion(discoveryResponse.getBody().getJobId());
-        
-        // Step 2: Get inventory report
-        ResponseEntity<InventoryReport> inventoryResponse = restTemplate.getForEntity(
-            "/api/v1/clm/csi/{csiId}/inventory-report",
-            InventoryReport.class,
-            csiId
-        );
-        
-        InventoryReport inventory = inventoryResponse.getBody();
-        assertThat(inventory.getCertsByCategory().get("30_DAYS")).isGreaterThan(0);
-        
-        // Step 3: Initiate renewal for expiring certificate
-        String expiringCertId = inventory.getExpiringCertificates().get(0).getCertificateId();
-        
-        RenewalRequest renewalRequest = new RenewalRequest();
-        renewalRequest.setCertificateId(expiringCertId);
-        renewalRequest.setAutoRenewal(true);
-        renewalRequest.setRenewalProvider("TEST-CA");
-        
-        ResponseEntity<RenewalResponse> renewalResponse = restTemplate.postForEntity(
-            "/api/v1/clm/csi/{csiId}/renewal",
-            renewalRequest,
-            RenewalResponse.class,
-            csiId
-        );
-        
-        assertThat(renewalResponse.getBody().getStatus()).isEqualTo("INITIATED");
-    }
-    
-    @Test
-    @DisplayName("Escalation workflow for unresolved items")
-    void testEscalationWorkflow() {
-        // Setup: Create CSI with old unresolved action items
-        String csiId = setupCsiWithOldActionItems();
-        
-        // Step 1: Get action items
-        ResponseEntity<ActionItem[]> actionItemsResponse = restTemplate.getForEntity(
-            "/api/v1/clm/csi/{csiId}/action-items?status=OPEN",
-            ActionItem[].class,
-            csiId
-        );
-        
-        ActionItem[] openItems = actionItemsResponse.getBody();
-        assertThat(openItems).hasSizeGreaterThan(0);
-        
-        // Step 2: Trigger escalation job
-        restTemplate.postForEntity(
-            "/api/v1/clm/escalations/process",
-            null,
-            Void.class
-        );
-        
-        // Step 3: Verify items marked as escalated
-        await().atMost(10, TimeUnit.SECONDS).until(() -> {
-            ResponseEntity<ActionItem[]> escalatedResponse = restTemplate.getForEntity(
-                "/api/v1/clm/csi/{csiId}/action-items?status=ESCALATED",
-                ActionItem[].class,
-                csiId
-            );
-            
-            return escalatedResponse.getBody().length > 0;
-        });
-    }
-}
-
-package com.citi.cert_management.container.test.utils;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 /**
- * Test data factory
+ * Enhanced CSI Details entity with CLM functionality support
+ * Stores CSI onboarding information and configuration for certificate lifecycle management
  */
-public class TestDataFactory {
+@Data
+@Document(collection = "csi_details")
+public class CsiDetails {
+    @Id
+    private String id;
     
-    public static ClmReport createCompleteReport() {
-        ClmReport report = new ClmReport();
-        report.setReportId(UUID.randomUUID().toString());
-        report.setGeneratedAt(LocalDateTime.now());
-        report.setReportType(ReportType.ONBOARDING);
-        
-        // CLM Results
-        ClmResults clmResults = new ClmResults();
-        clmResults.setVmDiscoveryResults(createDiscoveryResults(50, 25));
-        clmResults.setContainerDiscoveryResults(createDiscoveryResults(20, 15));
-        clmResults.setInventory(createCertificateInventory(40));
-        report.setClmResults(clmResults);
-        
-        // BCM Results
-        BcmResults bcmResults = new BcmResults();
-        bcmResults.setServersScanned(50);
-        bcmResults.setExceptionsFound(10);
-        bcmResults.setExceptionsByType(Map.of(
-            "FILE_PERMISSION", 5,
-            "SERVICE_CONFIG", 3,
-            "USER_ACCOUNT", 2
-        ));
-        report.setBcmResults(bcmResults);
-        
-        // EOVS Results
-        EovsResults eovsResults = new EovsResults();
-        eovsResults.setVulnerabilitiesFound(15);
-        eovsResults.setVulnerabilitiesBySeverity(Map.of(
-            "CRITICAL", 2,
-            "HIGH", 5,
-            "MEDIUM", 8
-        ));
-        report.setEovsResults(eovsResults);
-        
-        // Action Items
-        report.setActionItems(createActionItems(5));
-        
-        return report;
-    }
+    // Basic CSI Information
+    private String csiId;
+    private String csiName;
+    private String environment;
+    private String cmpRequestersOeId;
+    private String ownerTeamEmailDlName;
+    private String email;
+    private String escalationContacts;
+    private String primaryContact;
+    private String preferredRenewalProvider;
+    private boolean autoRenewalEnabled;
+    private String customExpiryThresholdDays;
+    private String pidUsername;
+    private String pidPassword;
+    private String repoType;
+    private List<String> repositories;
+    private String projects;
+    private List<String> notificationEmails;
+    private boolean dailyDigestEnabled;
+    private boolean criticalAlertsOnly;
+    private LocalDateTime onboardedAt;
+    private String onboardedBy;
+    private Date lastModified;
+    private boolean active;
+    private boolean impactAssessmentApplicable;
+    private String appName;
     
-    public static DiscoveryResults createDiscoveryResults(int serversScanned, int certsFound) {
-        DiscoveryResults results = new DiscoveryResults();
-        results.setTotalServersScanned(serversScanned);
-        results.setTotalCertsFound(certsFound);
-        results.setCertsByType(Map.of(
-            "SSL/TLS", certsFound * 60 / 100,
-            "Code Signing", certsFound * 30 / 100,
-            "Other", certsFound * 10 / 100
-        ));
-        return results;
-    }
+    // User mandatory inputs
+    private String requestorSoeid;
+    private String emailDl;
+    private String preferredRenewal;
+    private String bitbucketProjectUrl;
+    private String githubProjectUrl;
+    private List<String> notificationEmailList;
+    private List<String> escalationMatrix;
     
-    public static CertificateInventory createCertificateInventory(int totalCerts) {
-        CertificateInventory inventory = new CertificateInventory();
-        inventory.setTotalCertificates(totalCerts);
-        inventory.setCertsByExpiryCategory(Map.of(
-            "EXPIRED", 2,
-            "30_DAYS", 5,
-            "60_DAYS", 8,
-            "90_DAYS", 10,
-            "VALID", totalCerts - 25
-        ));
-        
-        List<CertificateDetail> certificates = new ArrayList<>();
-        for (int i = 0; i < totalCerts; i++) {
-            certificates.add(createCertificateDetail(i));
-        }
-        inventory.setCertificates(certificates);
-        
-        return inventory;
-    }
+    // CLM Configuration
+    private boolean vmDiscoveryEnabled;
+    private boolean containerDiscoveryEnabled;
+    private boolean autoDeploymentEnabled;
+    private String deploymentSchedule;
+    private Map<String, Boolean> clmFeatures;
     
-    public static List<ActionItem> createActionItems(int count) {
-        List<ActionItem> items = new ArrayList<>();
-        Priority[] priorities = Priority.values();
-        ActionType[] types = ActionType.values();
-        
-        for (int i = 0; i < count; i++) {
-            ActionItem item = new ActionItem();
-            item.setActionId("ACTION-" + i);
-            item.setType(types[i % types.length]);
-            item.setPriority(priorities[i % priorities.length]);
-            item.setDescription("Action required for " + item.getType());
-            item.setDueDate(LocalDateTime.now().plusDays(7 * (i + 1)));
-            item.setStatus(ActionStatus.OPEN);
-            item.setCreatedAt(LocalDateTime.now().minusDays(i));
-            items.add(item);
-        }
-        return items;
-    }
+    // Discovery Settings
+    private DiscoveryConfig vmDiscoveryConfig;
+    private DiscoveryConfig containerDiscoveryConfig;
+    
+    // Job Tracking
+    private String lastJobId;
+    private LocalDateTime lastScanDate;
+    private LocalDateTime nextScheduledScan;
+    private JobStatus lastJobStatus;
 }
 
 /**
- * Custom assertions for CLM domain objects
+ * Configuration for discovery operations
  */
-public class ClmAssertions {
-    
-    public static void assertValidCsiDetails(CsiDetails csi) {
-        assertThat(csi).isNotNull();
-        assertThat(csi.getCsiId()).isNotBlank();
-        assertThat(csi.getRequestorSoeid()).isNotBlank();
-        assertThat(csi.getEmailDl()).contains("@");
-        assertThat(csi.getModuleSubscriptions()).isNotEmpty();
-        assertThat(csi.getModuleSubscriptions()).hasSizeGreaterThanOrEqualTo(1);
-    }
-    
-    public static void assertSyncCompleted(CsiDetails csi) {
-        assertThat(csi.getServerSyncStatus()).isNotNull();
-        assertThat(csi.getServerSyncStatus().getState()).isEqualTo(SyncState.COMPLETED);
-        assertThat(csi.getCertificateSyncStatus().getState()).isEqualTo(SyncState.COMPLETED);
-        assertThat(csi.getRepositorySyncStatus().getState()).isEqualTo(SyncState.COMPLETED);
-        assertThat(csi.getLastSuccessfulSync()).isNotNull();
-    }
-    
-    public static void assertJobSuccessful(ClmJob job) {
-        assertThat(job.getStatus()).isEqualTo(JobStatus.COMPLETED);
-        assertThat(job.getErrorMessage()).isNull();
-        assertThat(job.getEndTime()).isNotNull();
-        assertThat(job.getEndTime()).isAfter(job.getStartTime());
-        assertThat(job.getReportId()).isNotNull();
-    }
+@Data
+public class DiscoveryConfig {
+    private boolean enabled;
+    private String schedule;
+    private List<String> includePaths;
+    private List<String> excludePaths;
+    private Map<String, String> additionalParams;
 }
 
+/**
+ * Job execution tracking entity
+ */
+@Data
+@Document(collection = "clm_jobs")
+public class ClmJob {
+    @Id
+    private String jobId;
+    private String csiId;
+    private JobType jobType;
+    private JobStatus status;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private String triggeredBy;
+    private TriggerType triggerType;
+    private Map<String, Object> jobParameters;
+    private List<JobStep> steps;
+    private String errorMessage;
+    private int retryCount;
+    private String reportId;
+}
 
+/**
+ * Individual job step tracking
+ */
+@Data
+public class JobStep {
+    private String stepName;
+    private StepStatus status;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private String output;
+    private String errorDetails;
+    private Map<String, Object> metadata;
+}
 
+/**
+ * CLM Report entity for storing scan results
+ */
+@Data
+@Document(collection = "clm_reports")
+public class ClmReport {
+    @Id
+    private String reportId;
+    private String jobId;
+    private String csiId;
+    private LocalDateTime generatedAt;
+    private ReportType reportType;
+    private ReportFormat format;
+    
+    // Discovery Results
+    private DiscoveryResults vmDiscoveryResults;
+    private DiscoveryResults containerDiscoveryResults;
+    
+    // Certificate Inventory
+    private CertificateInventory inventory;
+    
+    // Assessment Results
+    private ImpactAssessment impactAssessment;
+    private RiskAssessment riskAssessment;
+    
+    // Action Items
+    private List<ActionItem> actionItems;
+    
+    // Raw data for UI
+    private Map<String, Object> rawData;
+    
+    // Report metadata
+    private LocalDateTime expiresAt;
+    private boolean emailSent;
+    private LocalDateTime emailSentAt;
+}
 
+/**
+ * Discovery results structure
+ */
+@Data
+public class DiscoveryResults {
+    private int totalServersScanned;
+    private int serversWithCerts;
+    private int totalCertsFound;
+    private Map<String, Integer> certsByType;
+    private List<CertificateLocation> locations;
+    private List<String> scanErrors;
+    private Map<String, Object> metadata;
+}
 
+/**
+ * Certificate inventory details
+ */
+@Data
+public class CertificateInventory {
+    private int totalCertificates;
+    private Map<String, Integer> certsByExpiryCategory;
+    private List<CertificateDetail> certificates;
+    private int truststoreExpiry;
+    private Map<String, Integer> certsByEnvironment;
+    private Map<String, Integer> certsByPurpose;
+}
 
+/**
+ * Individual certificate details
+ */
+@Data
+public class CertificateDetail {
+    private String certificateId;
+    private String commonName;
+    private String issuer;
+    private LocalDateTime notBefore;
+    private LocalDateTime notAfter;
+    private int daysToExpiry;
+    private String location;
+    private String format;
+    private String purpose;
+    private boolean autoRenewEligible;
+    private String lastRenewalStatus;
+}
+
+/**
+ * Action items for follow-up
+ */
+@Data
+public class ActionItem {
+    private String actionId;
+    private ActionType type;
+    private Priority priority;
+    private String description;
+    private String targetCertificate;
+    private LocalDateTime dueDate;
+    private ActionStatus status;
+    private LocalDateTime createdAt;
+    private LocalDateTime resolvedAt;
+    private boolean escalated;
+}
+
+// Enums
+public enum JobType {
+    ONBOARDING_SCAN, SCHEDULED_SCAN, ADHOC_SCAN, RENEWAL, DEPLOYMENT
+}
+
+public enum JobStatus {
+    PENDING, RUNNING, COMPLETED, FAILED, CANCELLED, RETRY
+}
+
+public enum StepStatus {
+    PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED
+}
+
+public enum TriggerType {
+    MANUAL, SCHEDULED, API, ONBOARDING
+}
+
+public enum ReportType {
+    ONBOARDING, WEEKLY, ADHOC, RENEWAL
+}
+
+public enum ReportFormat {
+    JSON, HTML
+}
+
+public enum ActionType {
+    CERTIFICATE_EXPIRING, CONNECTION_FAILED, ANSIBLE_FAILED, 
+    CONTAINER_NOT_FOUND, RISK_IDENTIFIED, MANUAL_RENEWAL_NEEDED
+}
+
+public enum Priority {
+    CRITICAL, HIGH, MEDIUM, LOW
+}
+
+public enum ActionStatus {
+    OPEN, IN_PROGRESS, RESOLVED, ESCALATED
+}
