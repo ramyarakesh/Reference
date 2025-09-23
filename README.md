@@ -1,1658 +1,2433 @@
-package com.citi.cert_management.container.service;
+CSI Onboarding and Report Generation System - Complete Implementation
+Architecture Overview
+The system is designed to handle long-running asynchronous jobs with proper tracking and reporting. It consists of:
 
-import org.springframework.stereotype.Service;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+Job orchestration with state management
+Async job execution with progress tracking
+Daily report generation
+Weekly sync cycles
+Email notifications
+
+
+package com.citi.cert_management.entity;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+import javax.validation.constraints.NotNull;
+import java.util.Date;
+import java.util.List;
+
+@Document(collection = "CSIDetails")
+@Data
+public class CsiDetails {
+    @Id
+    private String id;
+    
+    @NotNull
+    private Integer csi;
+    
+    @NotNull
+    private String email;
+    
+    @NotNull
+    private String ownerTeamEmailDlName;
+    
+    // Basic CSI Information - from archcenter
+    private String csiManagerSOEID;
+    private Long csiManagerGEID;
+    private String businessOwner;
+    private String businessOwnerId;
+    private String cioName;
+    private String cioId;
+    private String appName;
+    private String cioDescription;
+    private String director;
+    private String directorId;
+    
+    // Optional parameters
+    private String cmpRequesterSoeId;
+    private List<String> notificationEmails;
+    private List<String> escalationContacts;
+    private String primaryContact;
+    
+    // Certificate preferences
+    private String preferredRenewalProvider; // PP, CMP, ACM
+    private Boolean autoRenewalEnabled;
+    private Integer customExpiryThresholdDays;
+    
+    // Repository configuration
+    private List<String> githubRepositories;
+    private List<String> bitbucketProjectUrls;
+    private List<String> bitbucketRepositories;
+    
+    // Notification preferences
+    private boolean dailyDigestEnabled;
+    private boolean criticalAlertsOnly;
+    
+    // Audit fields
+    private Date onboardedAt;
+    private String onboardedBy;
+    private Date lastModified;
+    private boolean active;
+    
+    // Module Subscriptions
+    private List<ModuleSubscription> moduleSubscriptions;
+    
+    // Sync Status
+    private SyncStatus serverSyncStatus;
+    private SyncStatus certificateSyncStatus;
+    private SyncStatus repositorySyncStatus;
+    private Date lastSuccessfulSync;
+    
+    // Job tracking
+    private String currentJobId;
+    private JobStatus jobStatus;
+    private Date lastJobExecutionTime;
+    private Date lastReportGenerationTime;
+    private String lastReportId;
+}
+
+package com.citi.cert_management.entity;
+
+import lombok.Data;
 import java.time.LocalDateTime;
-import java.util.*;
 
-/**
- * Service for managing CSI (Customer Service Identifier) profiles
- * Handles CRUD operations and module subscription management
- */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class CsiService {
-    
-    private final CsiMetadataRepository csiRepository;
-    
-    /**
-     * Creates a new CSI with module subscriptions
-     */
-    public CsiDetails createCsiWithModules(EnhancedCsiOnboardingRequest request) {
-        log.info("Creating CSI profile: {}", request.getCsiId());
-        
-        // Check if CSI already exists
-        if (csiRepository.existsByCsiId(request.getCsiId())) {
-            throw new CsiAlreadyExistsException("CSI already exists: " + request.getCsiId());
-        }
-        
-        CsiDetails csi = new CsiDetails();
-        
-        // Map basic fields
-        csi.setCsiId(request.getCsiId());
-        csi.setCsiName(request.getCsiName());
-        csi.setRequestorSoeid(request.getRequestorSoeid());
-        csi.setEmailDl(request.getEmailDl());
-        csi.setEmail(request.getEmail());
-        csi.setPreferredRenewal(request.getPreferredRenewal());
-        csi.setNotificationEmailList(request.getNotificationEmailList());
-        csi.setEscalationMatrix(request.getEscalationMatrix());
-        csi.setBitbucketProjectUrl(request.getBitbucketProjectUrl());
-        csi.setGithubProjectUrl(request.getGithubProjectUrl());
-        
-        // Set metadata
-        csi.setOnboardedAt(LocalDateTime.now());
-        csi.setOnboardedBy(request.getRequestorSoeid());
-        csi.setActive(true);
-        csi.setLastModified(new Date());
-        
-        // Create module subscriptions
-        List<ModuleSubscription> subscriptions = new ArrayList<>();
-        for (ModuleSubscriptionRequest moduleReq : request.getModuleSubscriptions()) {
-            ModuleSubscription subscription = new ModuleSubscription();
-            subscription.setModule(moduleReq.getModule());
-            subscription.setSelected(moduleReq.isSelected());
-            subscription.setConfiguration(mapConfiguration(moduleReq.getConfiguration()));
-            subscription.setSubscribedAt(LocalDateTime.now());
-            subscription.setSubscribedBy(request.getRequestorSoeid());
-            subscriptions.add(subscription);
-        }
-        csi.setModuleSubscriptions(subscriptions);
-        
-        // Initialize sync status
-        csi.setServerSyncStatus(createInitialSyncStatus());
-        csi.setCertificateSyncStatus(createInitialSyncStatus());
-        csi.setRepositorySyncStatus(createInitialSyncStatus());
-        
-        return csiRepository.save(csi);
-    }
-    
-    /**
-     * Retrieves CSI by ID
-     */
-    public CsiDetails getCsi(String csiId) {
-        return csiRepository.findByCsiId(csiId)
-            .orElseThrow(() -> new CsiNotFoundException("CSI not found: " + csiId));
-    }
-    
-    /**
-     * Updates CSI configuration
-     */
-    public CsiDetails updateCsi(String csiId, CsiUpdateRequest request) {
-        CsiDetails csi = getCsi(csiId);
-        
-        // Update allowed fields
-        if (request.getEmailDl() != null) {
-            csi.setEmailDl(request.getEmailDl());
-        }
-        if (request.getNotificationEmailList() != null) {
-            csi.setNotificationEmailList(request.getNotificationEmailList());
-        }
-        if (request.getEscalationMatrix() != null) {
-            csi.setEscalationMatrix(request.getEscalationMatrix());
-        }
-        if (request.getPreferredRenewal() != null) {
-            csi.setPreferredRenewal(request.getPreferredRenewal());
-        }
-        
-        csi.setLastModified(new Date());
-        
-        return csiRepository.save(csi);
-    }
-    
-    /**
-     * Updates module configuration for a specific module
-     */
-    public ModuleSubscription updateModuleConfiguration(String csiId, ModuleType moduleType, 
-                                                      ModuleConfigurationRequest configRequest) {
-        CsiDetails csi = getCsi(csiId);
-        
-        ModuleSubscription subscription = csi.getModuleSubscriptions().stream()
-            .filter(s -> s.getModule() == moduleType)
-            .findFirst()
-            .orElseThrow(() -> new ModuleNotSubscribedException(
-                "Module not found: " + moduleType));
-        
-        // Update configuration
-        ModuleConfiguration newConfig = mapConfiguration(configRequest);
-        subscription.setConfiguration(newConfig);
-        
-        csiRepository.save(csi);
-        
-        return subscription;
-    }
-    
-    /**
-     * Deactivates a CSI
-     */
-    public void deactivateCsi(String csiId) {
-        CsiDetails csi = getCsi(csiId);
-        csi.setActive(false);
-        csi.setLastModified(new Date());
-        csiRepository.save(csi);
-    }
-    
-    /**
-     * Gets all active CSIs
-     */
-    public List<CsiDetails> getActiveCsis() {
-        return csiRepository.findByActiveTrue();
-    }
-    
-    /**
-     * Updates sync status for a specific sync type
-     */
-    public void updateSyncStatus(String csiId, String syncType, SyncState state, String error) {
-        CsiDetails csi = getCsi(csiId);
-        
-        SyncStatus status = null;
-        switch (syncType) {
-            case "SERVER_SYNC":
-                status = csi.getServerSyncStatus();
-                break;
-            case "CERTIFICATE_SYNC":
-                status = csi.getCertificateSyncStatus();
-                break;
-            case "REPOSITORY_SYNC":
-                status = csi.getRepositorySyncStatus();
-                break;
-        }
-        
-        if (status != null) {
-            status.setState(state);
-            status.setLastAttempt(LocalDateTime.now());
-            if (state == SyncState.COMPLETED) {
-                status.setLastSuccess(LocalDateTime.now());
-                csi.setLastSuccessfulSync(LocalDateTime.now());
-            }
-            if (error != null) {
-                status.setErrorMessage(error);
-            }
-        }
-        
-        csiRepository.save(csi);
-    }
-    
-    private ModuleConfiguration mapConfiguration(ModuleConfigurationRequest request) {
-        ModuleConfiguration config = new ModuleConfiguration();
-        
-        // CLM configuration
-        config.setVmDiscoveryEnabled(request.isVmDiscoveryEnabled());
-        config.setContainerDiscoveryEnabled(request.isContainerDiscoveryEnabled());
-        config.setAutoDeploymentEnabled(request.isAutoDeploymentEnabled());
-        
-        // BCM configuration
-        config.setBcmMode(request.getBcmMode());
-        config.setBcmExceptionTypes(request.getBcmExceptionTypes());
-        config.setBcmAutoRemediationEnabled(
-            request.getBcmMode() == BcmMode.WITH_AUTO_REMEDIATION);
-        
-        // EOVS configuration
-        config.setEovsMode(request.getEovsMode());
-        config.setEovsUserAcknowledgmentRequired(
-            request.getEovsMode() == EovsMode.WITH_USER_ACKNOWLEDGED_REMEDIATION);
-        config.setEovsChecks(request.getEovsChecks());
-        
-        return config;
-    }
-    
-    private SyncStatus createInitialSyncStatus() {
-        SyncStatus status = new SyncStatus();
-        status.setState(SyncState.NOT_STARTED);
-        status.setRecordsProcessed(0);
-        status.setRecordsFailed(0);
-        return status;
-    }
+@Data
+public class ModuleSubscription {
+    private ModuleType module;
+    private boolean isSelected;
+    private ModuleConfiguration configuration;
+    private LocalDateTime subscribedAt;
+    private String subscribedBy;
 }
 
 
-package com.citi.cert_management.container.service;
+package com.citi.cert_management.entity;
 
-import org.springframework.stereotype.Service;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import java.time.LocalDateTime;
-import java.util.*;
-import java.util.stream.Collectors;
+import lombok.Data;
+import java.util.List;
 
-/**
- * Service for managing CLM reports
- * Handles report generation, retrieval, and search operations
- */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class ReportService {
+@Data
+public class ModuleConfiguration {
+    // CLM Configuration
+    private boolean vmDiscoveryEnabled;
+    private boolean containerDiscoveryEnabled;
+    private boolean autoDeploymentEnabled;
     
-    private final ClmReportRepository reportRepository;
-    private final ClmJobRepository jobRepository;
-    private final CsiMetadataRepository csiRepository;
-    private final ActionItemRepository actionItemRepository;
+    // BCM Configuration
+    private BcmMode bcmMode;
+    private List<String> bcmExceptionTypes;
+    private boolean bcmAutoRemediationEnabled;
     
-    /**
-     * Generates inventory report for a CSI
-     */
-    public ClmReport generateInventoryReport(String csiId, ReportFormat format) {
-        log.info("Generating inventory report for CSI: {} in format: {}", csiId, format);
-        
-        CsiDetails csi = csiRepository.findByCsiId(csiId)
-            .orElseThrow(() -> new CsiNotFoundException("CSI not found: " + csiId));
-        
-        ClmReport report = new ClmReport();
-        report.setReportId(UUID.randomUUID().toString());
-        report.setCsiId(csiId);
-        report.setGeneratedAt(LocalDateTime.now());
-        report.setReportType(ReportType.ADHOC);
-        report.setFormat(format);
-        
-        // Get latest CLM results
-        ClmResults clmResults = getLatestClmResults(csiId);
-        report.setClmResults(clmResults);
-        
-        // Generate inventory from results
-        if (clmResults != null) {
-            CertificateInventory inventory = generateInventory(clmResults);
-            clmResults.setInventory(inventory);
-        }
-        
-        // Get action items
-        List<ActionItem> actionItems = actionItemRepository.findByCsiIdAndStatus(
-            csiId, ActionStatus.OPEN);
-        report.setActionItems(actionItems);
-        
-        // Set retention
-        report.setExpiresAt(LocalDateTime.now().plusMonths(3));
-        
-        return reportRepository.save(report);
-    }
+    // EOVS Configuration
+    private EovsMode eovsMode;
+    private List<String> includePaths;
+    private List<String> excludePaths;
+    private boolean eovsUserAcknowledgmentRequired;
+    private List<String> eovsChecks;
+}
+
+package com.citi.cert_management.entity;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+
+@Document(collection = "CSIJobExecutions")
+@Data
+public class CsiJobExecution {
+    @Id
+    private String jobId;
+    private Integer csi;
+    private JobType jobType; // ONBOARDING, WEEKLY_SYNC, MANUAL_SYNC
+    private JobStatus overallStatus;
+    private Date startTime;
+    private Date endTime;
+    private Date lastUpdated;
+    private List<JobStep> steps = new ArrayList<>();
+    private Map<String, Object> metadata;
+    private String triggeredBy;
+    private List<String> errors = new ArrayList<>();
+    private List<String> warnings = new ArrayList<>();
+    private Integer completionPercentage = 0;
+    private boolean reportGenerationEnabled = false;
+    private Date reportGenerationStartDate;
+}
+
+package com.citi.cert_management.entity;
+
+import lombok.Data;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+
+@Data
+public class JobStep {
+    private String stepId;
+    private StepType stepType;
+    private StepStatus status = StepStatus.PENDING;
+    private Date startTime;
+    private Date endTime;
+    private Date lastChecked;
+    private Integer progress = 0; // 0-100
+    private String message;
+    private Map<String, Object> results;
+    private List<String> subTaskIds = new ArrayList<>(); // For tracking ansible jobs
+    private List<String> dependsOn = new ArrayList<>(); // Step dependencies
+    private Integer retryCount = 0;
+    private Integer maxRetries = 3;
+}
+
+package com.citi.cert_management.entity;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+@Document(collection = "CSIReports")
+@Data
+public class CsiReport {
+    @Id
+    private String reportId;
+    private Integer csi;
+    private String jobId;
+    private Date generatedAt;
+    private JobStatus jobStatus;
+    private Integer completionPercentage;
+    private boolean isFinalReport;
     
-    /**
-     * Gets report by job ID
-     */
-    public ClmReport getReportByJobId(String jobId, ReportFormat format) {
-        ClmReport report = reportRepository.findByJobId(jobId)
-            .orElseThrow(() -> new ReportNotFoundException("Report not found for job: " + jobId));
-        
-        // Convert format if needed
-        if (format != report.getFormat()) {
-            report = convertReportFormat(report, format);
-        }
-        
-        return report;
-    }
+    // Server statistics
+    private Integer totalServers = 0;
+    private Integer vmCount = 0;
+    private Integer windowsCount = 0;
+    private Integer containersCount = 0;
+    private String vmScanStatus;
+    private String windowsScanStatus;
+    private Integer successfulScans = 0;
+    private Integer failedScans = 0;
     
-    /**
-     * Gets latest report for a CSI
-     */
-    public ClmReport getLatestReport(String csiId, ReportFormat format) {
-        ClmReport report = reportRepository
-            .findFirstByCsiIdOrderByGeneratedAtDesc(csiId)
-            .orElseThrow(() -> new ReportNotFoundException(
-                "No reports found for CSI: " + csiId));
-        
-        if (format != report.getFormat()) {
-            report = convertReportFormat(report, format);
-        }
-        
-        return report;
-    }
+    // Certificate statistics
+    private Integer totalCertificates = 0;
+    private Integer expiredCerts = 0;
+    private Integer expiringIn30Days = 0;
+    private Integer expiringIn60Days = 0;
+    private Integer expiringIn90Days = 0;
+    private Integer trustStoreExpiry = 0;
     
-    /**
-     * Searches reports based on criteria
-     */
-    public List<ClmReport> searchReports(String csiId, LocalDateTime startDate, 
-                                       LocalDateTime endDate, ReportType reportType) {
-        log.info("Searching reports - CSI: {}, Start: {}, End: {}, Type: {}", 
-                csiId, startDate, endDate, reportType);
-        
-        // Build query based on provided criteria
-        if (csiId != null && reportType != null && startDate != null && endDate != null) {
-            return reportRepository.findByCsiIdAndReportTypeAndGeneratedAtBetween(
-                csiId, reportType, startDate, endDate);
-        } else if (csiId != null && startDate != null && endDate != null) {
-            return reportRepository.findByCsiIdAndGeneratedAtBetween(
-                csiId, startDate, endDate);
-        } else if (csiId != null && reportType != null) {
-            return reportRepository.findByCsiIdAndReportType(csiId, reportType);
-        } else if (csiId != null) {
-            return reportRepository.findByCsiId(csiId);
-        } else {
-            return reportRepository.findByGeneratedAtBetween(
-                startDate != null ? startDate : LocalDateTime.now().minusMonths(3),
-                endDate != null ? endDate : LocalDateTime.now()
-            );
-        }
-    }
+    // Repository statistics
+    private Integer totalRepositories = 0;
+    private Integer scannedRepositories = 0;
+    private Integer certificatesInCode = 0;
     
-    /**
-     * Converts report summaries for API response
-     */
-    public List<ReportSummary> convertToReportSummaries(List<ClmReport> reports) {
-        return reports.stream()
-            .map(this::createReportSummary)
-            .collect(Collectors.toList());
-    }
+    // BCM statistics
+    private Integer bcmExceptions = 0;
+    private Integer criticalExceptions = 0;
     
-    /**
-     * Generates adhoc report
-     */
-    public ClmReport generateAdhocReport(ClmJob job) {
-        log.info("Generating adhoc report for job: {}", job.getJobId());
-        
-        ClmReport report = new ClmReport();
-        report.setReportId(UUID.randomUUID().toString());
-        report.setJobId(job.getJobId());
-        report.setCsiId(job.getCsiId());
-        report.setGeneratedAt(LocalDateTime.now());
-        report.setReportType(ReportType.ADHOC);
-        report.setFormat(ReportFormat.JSON);
-        
-        // Get module results from job parameters
-        List<ModuleExecutionResult> moduleResults = 
-            (List<ModuleExecutionResult>) job.getJobParameters().get("moduleResults");
-        
-        if (moduleResults != null) {
-            processModuleResults(report, moduleResults);
-        }
-        
-        // Consolidate action items
-        report.setActionItems(consolidateActionItems(report));
-        
-        // Set retention
-        report.setExpiresAt(LocalDateTime.now().plusMonths(3));
-        
-        return reportRepository.save(report);
-    }
+    // Impact assessment
+    private List<String> highRiskItems = new ArrayList<>();
+    private List<String> mediumRiskItems = new ArrayList<>();
+    private List<String> actionItems = new ArrayList<>();
     
-    /**
-     * Deletes expired reports
-     */
-    public void deleteExpiredReports() {
-        log.info("Deleting expired reports");
-        List<ClmReport> expiredReports = reportRepository
-            .findByExpiresAtBefore(LocalDateTime.now());
-        
-        log.info("Found {} expired reports to delete", expiredReports.size());
-        reportRepository.deleteAll(expiredReports);
-    }
-    
-    private ReportSummary createReportSummary(ClmReport report) {
-        ReportSummary summary = new ReportSummary();
-        summary.setReportId(report.getReportId());
-        summary.setCsiId(report.getCsiId());
-        summary.setReportType(report.getReportType());
-        summary.setGeneratedAt(report.getGeneratedAt());
-        summary.setJobId(report.getJobId());
-        
-        // Add summary statistics
-        if (report.getClmResults() != null && report.getClmResults().getInventory() != null) {
-            summary.setTotalCertificates(
-                report.getClmResults().getInventory().getTotalCertificates());
-        }
-        
-        summary.setActionItemCount(
-            report.getActionItems() != null ? report.getActionItems().size() : 0);
-        
-        summary.setCriticalItemCount(
-            report.getActionItems() != null ? 
-                (int) report.getActionItems().stream()
-                    .filter(item -> item.getPriority() == Priority.CRITICAL)
-                    .count() : 0);
-        
-        return summary;
-    }
-    
-    private ClmReport convertReportFormat(ClmReport report, ReportFormat targetFormat) {
-        if (targetFormat == ReportFormat.HTML && report.getFormat() == ReportFormat.JSON) {
-            // Convert JSON to HTML using template service
-            // This would be implemented with template engine
-            log.info("Converting report {} from JSON to HTML", report.getReportId());
-        }
-        return report;
-    }
-    
-    private void processModuleResults(ClmReport report, List<ModuleExecutionResult> results) {
-        for (ModuleExecutionResult result : results) {
-            switch (result.getModule()) {
-                case CLM:
-                    report.setClmResults((ClmResults) result.getResults());
-                    break;
-                case BCM:
-                    report.setBcmResults((BcmResults) result.getResults());
-                    break;
-                case EOVS:
-                    report.setEovsResults((EovsResults) result.getResults());
-                    break;
-            }
-        }
-    }
-    
-    private List<ActionItem> consolidateActionItems(ClmReport report) {
-        List<ActionItem> items = new ArrayList<>();
-        
-        // Add items from each module
-        if (report.getClmResults() != null) {
-            items.addAll(generateClmActionItems(report.getClmResults()));
-        }
-        if (report.getBcmResults() != null) {
-            items.addAll(generateBcmActionItems(report.getBcmResults()));
-        }
-        if (report.getEovsResults() != null) {
-            items.addAll(generateEovsActionItems(report.getEovsResults()));
-        }
-        
-        return items;
-    }
-    
-    private CertificateInventory generateInventory(ClmResults clmResults) {
-        CertificateInventory inventory = new CertificateInventory();
-        
-        // Combine VM and container certificates
-        List<CertificateDetail> allCerts = new ArrayList<>();
-        
-        if (clmResults.getVmDiscoveryResults() != null) {
-            allCerts.addAll(extractCertificates(clmResults.getVmDiscoveryResults()));
-        }
-        
-        if (clmResults.getContainerDiscoveryResults() != null) {
-            allCerts.addAll(extractCertificates(clmResults.getContainerDiscoveryResults()));
-        }
-        
-        inventory.setTotalCertificates(allCerts.size());
-        inventory.setCertificates(allCerts);
-        
-        // Categorize by expiry
-        Map<String, Integer> expiryCategories = new HashMap<>();
-        expiryCategories.put("EXPIRED", 0);
-        expiryCategories.put("30_DAYS", 0);
-        expiryCategories.put("60_DAYS", 0);
-        expiryCategories.put("90_DAYS", 0);
-        expiryCategories.put("VALID", 0);
-        
-        for (CertificateDetail cert : allCerts) {
-            String category = categorizeCertificate(cert);
-            expiryCategories.merge(category, 1, Integer::sum);
-        }
-        
-        inventory.setCertsByExpiryCategory(expiryCategories);
-        
-        return inventory;
-    }
+    // Progress details
+    private List<StepProgress> stepProgressList = new ArrayList<>();
+}
+
+package com.citi.cert_management.enums;
+
+public enum JobType {
+    ONBOARDING, WEEKLY_SYNC, MANUAL_SYNC
+}
+
+public enum JobStatus {
+    PENDING, IN_PROGRESS, COMPLETED, FAILED, PARTIALLY_COMPLETED
+}
+
+public enum StepType {
+    SERVER_SYNC, 
+    CERTIFICATE_SYNC, 
+    REPOSITORY_SYNC,
+    ANSIBLE_CONNECTIVITY_TEST, 
+    VM_CERT_SCAN, 
+    WINDOWS_CERT_SCAN,
+    BCM_EXCEPTION_SCAN, 
+    REPO_CERT_USAGE_SCAN, 
+    IMPACT_ASSESSMENT
+}
+
+public enum StepStatus {
+    PENDING, IN_PROGRESS, COMPLETED, FAILED, PARTIALLY_COMPLETED, SKIPPED
+}
+
+public enum SyncStatus {
+    NOT_STARTED, IN_PROGRESS, COMPLETED, FAILED
+}
+
+public enum ModuleType {
+    CLM, BCM, EOVS
+}
+
+public enum BcmMode {
+    MONITOR_ONLY, AUTO_REMEDIATE
+}
+
+public enum EovsMode {
+    SCAN_ONLY, SCAN_AND_NOTIFY, AUTO_REMEDIATE
 }
 
 
-package com.citi.cert_management.container.service;
+package com.citi.cert_management.service;
 
-import org.springframework.stereotype.Service;
-import lombok.RequiredArgsConstructor;
+import com.citi.cert_management.entity.*;
+import com.citi.cert_management.enums.*;
+import com.citi.cert_management.repository.*;
 import lombok.extern.slf4j.Slf4j;
-import java.time.LocalDateTime;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Service for testing ansible connectivity to servers
- */
-@Slf4j
 @Service
-@RequiredArgsConstructor
-public class ConnectionTestService {
+@Slf4j
+public class CsiJobOrchestrator {
     
-    private final ServerRepository serverRepository;
-    private final AnsibleService ansibleService;
+    @Autowired
+    private CsiJobExecutionRepository jobExecutionRepository;
+    
+    @Autowired
+    private CsiDetailsRepository csiDetailsRepository;
+    
+    @Autowired
+    private CasIntegrationService casIntegrationService;
+    
+    @Autowired
+    private VaultIntegrationService vaultIntegrationService;
+    
+    @Autowired
+    private BitbucketIntegrationService bitbucketIntegrationService;
+    
+    @Autowired
+    private AnsibleIntegrationService ansibleIntegrationService;
+    
+    @Autowired
+    private CertificateScanningService certificateScanningService;
+    
+    @Autowired
+    private ImpactAssessmentService impactAssessmentService;
+    
+    @Autowired
+    private JobProgressTracker jobProgressTracker;
+    
     private final ExecutorService executorService = Executors.newFixedThreadPool(10);
     
     /**
-     * Tests ansible connections for all servers of a CSI
+     * Initiates CSI onboarding job
      */
-    public CompletableFuture<ConnectionTestResult> testServerConnections(String csiId) {
-        log.info("Testing server connections for CSI: {}", csiId);
+    public String initiateOnboardingJob(Integer csi, String triggeredBy) {
+        log.info("Initiating onboarding job for CSI: {}", csi);
         
-        return CompletableFuture.supplyAsync(() -> {
-            List<Server> servers = serverRepository.findByCsiId(csiId);
-            ConnectionTestResult result = new ConnectionTestResult();
-            result.setTotalServers(servers.size());
-            
-            if (servers.isEmpty()) {
-                log.warn("No servers found for CSI: {}", csiId);
-                return result;
-            }
-            
-            // Test each server in parallel
-            List<CompletableFuture<ServerConnectionResult>> futures = new ArrayList<>();
-            
-            for (Server server : servers) {
-                CompletableFuture<ServerConnectionResult> future = 
-                    testSingleServerConnection(server);
-                futures.add(future);
-            }
-            
-            // Wait for all tests to complete
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-            
-            // Process results
-            int successCount = 0;
-            int failedCount = 0;
-            List<Server> connectedServers = new ArrayList<>();
-            
-            for (int i = 0; i < servers.size(); i++) {
-                ServerConnectionResult connResult = futures.get(i).join();
-                Server server = servers.get(i);
-                
-                server.setConnectionStatus(connResult.getStatus());
-                server.setLastConnectionTest(LocalDateTime.now());
-                
-                if (connResult.getStatus() == ConnectionStatus.SUCCESS) {
-                    successCount++;
-                    connectedServers.add(server);
-                } else {
-                    failedCount++;
-                    log.warn("Connection failed for server: {} - {}", 
-                            server.getServerId(), connResult.getErrorMessage());
-                }
-            }
-            
-            // Save updated connection status
-            serverRepository.saveAll(servers);
-            
-            result.setSuccessfulConnections(successCount);
-            result.setFailedConnections(failedCount);
-            result.setServers(servers);
-            
-            log.info("Connection test completed for CSI: {} - Success: {}, Failed: {}", 
-                    csiId, successCount, failedCount);
-            
-            return result;
-        }, executorService);
+        // Create job execution record
+        CsiJobExecution jobExecution = createJobExecution(csi, JobType.ONBOARDING, triggeredBy);
+        
+        // Initialize job steps
+        initializeJobSteps(jobExecution);
+        
+        // Save initial job state
+        jobExecutionRepository.save(jobExecution);
+        
+        // Update CSI details
+        CsiDetails csiDetails = csiDetailsRepository.findByCsi(csi);
+        if (csiDetails != null) {
+            csiDetails.setCurrentJobId(jobExecution.getJobId());
+            csiDetails.setJobStatus(JobStatus.IN_PROGRESS);
+            csiDetails.setLastJobExecutionTime(new Date());
+            csiDetailsRepository.save(csiDetails);
+        }
+        
+        // Start job execution asynchronously
+        executeJobAsync(jobExecution.getJobId());
+        
+        return jobExecution.getJobId();
     }
     
     /**
-     * Tests connection to a single server
+     * Executes job asynchronously
      */
-    private CompletableFuture<ServerConnectionResult> testSingleServerConnection(Server server) {
-        return CompletableFuture.supplyAsync(() -> {
-            ServerConnectionResult result = new ServerConnectionResult();
-            result.setServerId(server.getServerId());
+    @Async
+    public void executeJobAsync(String jobId) {
+        try {
+            CsiJobExecution jobExecution = jobExecutionRepository.findById(jobId)
+                .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
             
+            jobExecution.setStartTime(new Date());
+            jobExecution.setOverallStatus(JobStatus.IN_PROGRESS);
+            jobExecutionRepository.save(jobExecution);
+            
+            // Phase 1: Execute parallel sync operations
+            executePhase1SyncOperations(jobExecution);
+            
+            // Phase 2: Execute dependent operations (will check completion in background)
+            schedulePhase2Operations(jobExecution);
+            
+            // Enable report generation after 2 days
+            scheduleReportGeneration(jobExecution);
+            
+        } catch (Exception e) {
+            log.error("Error executing job: " + jobId, e);
+            handleJobError(jobId, e);
+        }
+    }
+    
+    /**
+     * Phase 1: Execute sync operations in parallel
+     */
+    private void executePhase1SyncOperations(CsiJobExecution jobExecution) {
+        log.info("Starting Phase 1 sync operations for job: {}", jobExecution.getJobId());
+        
+        // Execute server sync
+        CompletableFuture<Void> serverSyncFuture = CompletableFuture.runAsync(() -> {
+            JobStep serverSyncStep = findStepByType(jobExecution, StepType.SERVER_SYNC);
+            executeServerSync(jobExecution, serverSyncStep);
+        }, executorService);
+        
+        // Execute certificate sync
+        CompletableFuture<Void> certSyncFuture = CompletableFuture.runAsync(() -> {
+            JobStep certSyncStep = findStepByType(jobExecution, StepType.CERTIFICATE_SYNC);
+            executeCertificateSync(jobExecution, certSyncStep);
+        }, executorService);
+        
+        // Execute repository sync
+        CompletableFuture<Void> repoSyncFuture = CompletableFuture.runAsync(() -> {
+            JobStep repoSyncStep = findStepByType(jobExecution, StepType.REPOSITORY_SYNC);
+            executeRepositorySync(jobExecution, repoSyncStep);
+        }, executorService);
+        
+        // Don't wait for completion - let them run asynchronously
+    }
+    
+    /**
+     * Execute server sync from CAS
+     */
+    private void executeServerSync(CsiJobExecution jobExecution, JobStep step) {
+        try {
+            step.setStatus(StepStatus.IN_PROGRESS);
+            step.setStartTime(new Date());
+            step.setMessage("Initiating server sync from CAS");
+            updateJobStep(jobExecution, step);
+            
+            // Call CAS integration service
+            String syncJobId = casIntegrationService.initiateServerSync(jobExecution.getCsi());
+            step.getSubTaskIds().add(syncJobId);
+            
+            // Update progress
+            step.setProgress(50);
+            step.setMessage("Server sync initiated. Job ID: " + syncJobId);
+            updateJobStep(jobExecution, step);
+            
+            // Poll for completion (this could be done in a separate scheduled job)
+            boolean completed = pollForCompletion(() -> 
+                casIntegrationService.checkSyncStatus(syncJobId), 
+                30, // max attempts
+                60000 // 1 minute interval
+            );
+            
+            if (completed) {
+                step.setStatus(StepStatus.COMPLETED);
+                step.setProgress(100);
+                step.setMessage("Server sync completed successfully");
+                
+                // Retrieve sync results
+                Map<String, Object> results = casIntegrationService.getSyncResults(syncJobId);
+                step.setResults(results);
+            } else {
+                step.setStatus(StepStatus.PARTIALLY_COMPLETED);
+                step.setProgress(75);
+                step.setMessage("Server sync timed out - will check in background");
+            }
+            
+        } catch (Exception e) {
+            log.error("Error in server sync for job: " + jobExecution.getJobId(), e);
+            step.setStatus(StepStatus.FAILED);
+            step.setMessage("Server sync failed: " + e.getMessage());
+        } finally {
+            step.setEndTime(new Date());
+            updateJobStep(jobExecution, step);
+        }
+    }
+    
+    /**
+     * Execute certificate sync from Vault
+     */
+    private void executeCertificateSync(CsiJobExecution jobExecution, JobStep step) {
+        try {
+            step.setStatus(StepStatus.IN_PROGRESS);
+            step.setStartTime(new Date());
+            step.setMessage("Initiating certificate sync from Vault");
+            updateJobStep(jobExecution, step);
+            
+            // Call Vault integration service
+            Map<String, Object> syncResult = vaultIntegrationService.syncCertificates(jobExecution.getCsi());
+            
+            step.setStatus(StepStatus.COMPLETED);
+            step.setProgress(100);
+            step.setResults(syncResult);
+            step.setMessage("Certificate sync completed. Synced " + 
+                syncResult.getOrDefault("certificateCount", 0) + " certificates");
+            
+        } catch (Exception e) {
+            log.error("Error in certificate sync for job: " + jobExecution.getJobId(), e);
+            step.setStatus(StepStatus.FAILED);
+            step.setMessage("Certificate sync failed: " + e.getMessage());
+        } finally {
+            step.setEndTime(new Date());
+            updateJobStep(jobExecution, step);
+        }
+    }
+    
+    /**
+     * Execute repository sync from Bitbucket/GitHub
+     */
+    private void executeRepositorySync(CsiJobExecution jobExecution, JobStep step) {
+        try {
+            step.setStatus(StepStatus.IN_PROGRESS);
+            step.setStartTime(new Date());
+            step.setMessage("Initiating repository sync");
+            updateJobStep(jobExecution, step);
+            
+            CsiDetails csiDetails = csiDetailsRepository.findByCsi(jobExecution.getCsi());
+            
+            List<String> allRepos = new ArrayList<>();
+            allRepos.addAll(csiDetails.getBitbucketRepositories() != null ? 
+                csiDetails.getBitbucketRepositories() : Collections.emptyList());
+            allRepos.addAll(csiDetails.getGithubRepositories() != null ? 
+                csiDetails.getGithubRepositories() : Collections.emptyList());
+            
+            Map<String, Object> syncResult = bitbucketIntegrationService.syncRepositories(
+                jobExecution.getCsi(), allRepos);
+            
+            step.setStatus(StepStatus.COMPLETED);
+            step.setProgress(100);
+            step.setResults(syncResult);
+            step.setMessage("Repository sync completed. Synced " + 
+                syncResult.getOrDefault("repositoryCount", 0) + " repositories");
+            
+        } catch (Exception e) {
+            log.error("Error in repository sync for job: " + jobExecution.getJobId(), e);
+            step.setStatus(StepStatus.FAILED);
+            step.setMessage("Repository sync failed: " + e.getMessage());
+        } finally {
+            step.setEndTime(new Date());
+            updateJobStep(jobExecution, step);
+        }
+    }
+    
+    /**
+     * Schedule Phase 2 operations to run after dependencies are met
+     */
+    private void schedulePhase2Operations(CsiJobExecution jobExecution) {
+        // Schedule ansible connectivity test (depends on server sync)
+        jobProgressTracker.scheduleStepExecution(
+            jobExecution.getJobId(),
+            StepType.ANSIBLE_CONNECTIVITY_TEST,
+            () -> executeAnsibleConnectivityTest(jobExecution)
+        );
+        
+        // Schedule repository scans (depends on cert and repo sync)
+        jobProgressTracker.scheduleStepExecution(
+            jobExecution.getJobId(),
+            StepType.REPO_CERT_USAGE_SCAN,
+            () -> executeRepositoryScans(jobExecution)
+        );
+    }
+    
+    /**
+     * Execute Ansible connectivity test
+     */
+    private void executeAnsibleConnectivityTest(CsiJobExecution jobExecution) {
+        JobStep step = findStepByType(jobExecution, StepType.ANSIBLE_CONNECTIVITY_TEST);
+        
+        try {
+            // Check if server sync is completed
+            JobStep serverSyncStep = findStepByType(jobExecution, StepType.SERVER_SYNC);
+            if (serverSyncStep.getStatus() != StepStatus.COMPLETED) {
+                step.setStatus(StepStatus.SKIPPED);
+                step.setMessage("Skipped - Server sync not completed");
+                updateJobStep(jobExecution, step);
+                return;
+            }
+            
+            step.setStatus(StepStatus.IN_PROGRESS);
+            step.setStartTime(new Date());
+            updateJobStep(jobExecution, step);
+            
+            // Get servers from inventory
+            List<FEInventoryReportNew> servers = inventoryRepository.findByCsi(jobExecution.getCsi());
+            
+            // Test ansible connectivity
+            Map<String, Object> connectivityResults = 
+                ansibleIntegrationService.testConnectivity(servers);
+            
+            step.setStatus(StepStatus.COMPLETED);
+            step.setProgress(100);
+            step.setResults(connectivityResults);
+            step.setMessage("Ansible connectivity test completed");
+            
+            // Schedule server scans for successful connections
+            scheduleServerScans(jobExecution, connectivityResults);
+            
+        } catch (Exception e) {
+            log.error("Error in ansible connectivity test", e);
+            step.setStatus(StepStatus.FAILED);
+            step.setMessage("Ansible connectivity test failed: " + e.getMessage());
+        } finally {
+            step.setEndTime(new Date());
+            updateJobStep(jobExecution, step);
+        }
+    }
+    
+    /**
+     * Schedule server scans (VM and Windows)
+     */
+    private void scheduleServerScans(CsiJobExecution jobExecution, 
+                                   Map<String, Object> connectivityResults) {
+        // Schedule VM scans
+        jobProgressTracker.scheduleStepExecution(
+            jobExecution.getJobId(),
+            StepType.VM_CERT_SCAN,
+            () -> executeVmCertScan(jobExecution, connectivityResults)
+        );
+        
+        // Schedule Windows scans
+        jobProgressTracker.scheduleStepExecution(
+            jobExecution.getJobId(),
+            StepType.WINDOWS_CERT_SCAN,
+            () -> executeWindowsCertScan(jobExecution, connectivityResults)
+        );
+        
+        // Schedule BCM exception scan
+        jobProgressTracker.scheduleStepExecution(
+            jobExecution.getJobId(),
+            StepType.BCM_EXCEPTION_SCAN,
+            () -> executeBcmExceptionScan(jobExecution, connectivityResults)
+        );
+    }
+    
+    /**
+     * Execute VM certificate scan
+     */
+    private void executeVmCertScan(CsiJobExecution jobExecution, 
+                                  Map<String, Object> connectivityResults) {
+        JobStep step = findStepByType(jobExecution, StepType.VM_CERT_SCAN);
+        
+        try {
+            step.setStatus(StepStatus.IN_PROGRESS);
+            step.setStartTime(new Date());
+            updateJobStep(jobExecution, step);
+            
+            // Get successful VM servers
+            List<String> vmServers = extractSuccessfulServers(connectivityResults, "VM");
+            
+            if (vmServers.isEmpty()) {
+                step.setStatus(StepStatus.SKIPPED);
+                step.setMessage("No VM servers available for scanning");
+                updateJobStep(jobExecution, step);
+                return;
+            }
+            
+            // Initiate ansible playbook for VM cert scan
+            String playbookJobId = ansibleIntegrationService.initiateVmCertScan(
+                jobExecution.getCsi(), vmServers);
+            step.getSubTaskIds().add(playbookJobId);
+            
+            step.setProgress(25);
+            step.setMessage("VM certificate scan initiated. Ansible job: " + playbookJobId);
+            updateJobStep(jobExecution, step);
+            
+            // This will complete asynchronously - progress will be tracked separately
+            
+        } catch (Exception e) {
+            log.error("Error in VM cert scan", e);
+            step.setStatus(StepStatus.FAILED);
+            step.setMessage("VM cert scan failed: " + e.getMessage());
+            step.setEndTime(new Date());
+            updateJobStep(jobExecution, step);
+        }
+    }
+    
+    /**
+     * Execute repository certificate usage scan
+     */
+    private void executeRepositoryScans(CsiJobExecution jobExecution) {
+        JobStep step = findStepByType(jobExecution, StepType.REPO_CERT_USAGE_SCAN);
+        
+        try {
+            // Check dependencies
+            JobStep certSyncStep = findStepByType(jobExecution, StepType.CERTIFICATE_SYNC);
+            JobStep repoSyncStep = findStepByType(jobExecution, StepType.REPOSITORY_SYNC);
+            
+            if (certSyncStep.getStatus() != StepStatus.COMPLETED || 
+                repoSyncStep.getStatus() != StepStatus.COMPLETED) {
+                step.setStatus(StepStatus.SKIPPED);
+                step.setMessage("Skipped - Dependencies not completed");
+                updateJobStep(jobExecution, step);
+                return;
+            }
+            
+            step.setStatus(StepStatus.IN_PROGRESS);
+            step.setStartTime(new Date());
+            updateJobStep(jobExecution, step);
+            
+            // Scan repositories for certificate usage
+            Map<String, Object> scanResults = 
+                certificateScanningService.scanRepositoriesForCertUsage(jobExecution.getCsi());
+            
+            step.setStatus(StepStatus.COMPLETED);
+            step.setProgress(100);
+            step.setResults(scanResults);
+            step.setMessage("Repository scan completed. Found " + 
+                scanResults.getOrDefault("certificatesInCode", 0) + " certificates in code");
+            
+        } catch (Exception e) {
+            log.error("Error in repository scan", e);
+            step.setStatus(StepStatus.FAILED);
+            step.setMessage("Repository scan failed: " + e.getMessage());
+        } finally {
+            step.setEndTime(new Date());
+            updateJobStep(jobExecution, step);
+        }
+    }
+    
+    /**
+     * Schedule report generation to start after 2 days
+     */
+    private void scheduleReportGeneration(CsiJobExecution jobExecution) {
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.DAY_OF_MONTH, 2);
+        
+        jobExecution.setReportGenerationEnabled(true);
+        jobExecution.setReportGenerationStartDate(cal.getTime());
+        jobExecutionRepository.save(jobExecution);
+        
+        log.info("Report generation scheduled to start on {} for job {}", 
+            cal.getTime(), jobExecution.getJobId());
+    }
+    
+    /**
+     * Initialize job steps with dependencies
+     */
+    private void initializeJobSteps(CsiJobExecution jobExecution) {
+        List<JobStep> steps = new ArrayList<>();
+        
+        // Phase 1 - Parallel sync operations
+        steps.add(createJobStep(StepType.SERVER_SYNC, null));
+        steps.add(createJobStep(StepType.CERTIFICATE_SYNC, null));
+        steps.add(createJobStep(StepType.REPOSITORY_SYNC, null));
+        
+        // Phase 2 - Dependent operations
+        steps.add(createJobStep(StepType.ANSIBLE_CONNECTIVITY_TEST, 
+            Arrays.asList(StepType.SERVER_SYNC.name())));
+        
+        steps.add(createJobStep(StepType.REPO_CERT_USAGE_SCAN, 
+            Arrays.asList(StepType.CERTIFICATE_SYNC.name(), StepType.REPOSITORY_SYNC.name())));
+        
+        // Phase 3 - Server scans (depends on ansible connectivity)
+        steps.add(createJobStep(StepType.VM_CERT_SCAN, 
+            Arrays.asList(StepType.ANSIBLE_CONNECTIVITY_TEST.name())));
+        steps.add(createJobStep(StepType.WINDOWS_CERT_SCAN, 
+            Arrays.asList(StepType.ANSIBLE_CONNECTIVITY_TEST.name())));
+        steps.add(createJobStep(StepType.BCM_EXCEPTION_SCAN, 
+            Arrays.asList(StepType.ANSIBLE_CONNECTIVITY_TEST.name())));
+        
+        // Phase 4 - Impact assessment (depends on all scans)
+        steps.add(createJobStep(StepType.IMPACT_ASSESSMENT, 
+            Arrays.asList(StepType.VM_CERT_SCAN.name(), 
+                         StepType.WINDOWS_CERT_SCAN.name(),
+                         StepType.REPO_CERT_USAGE_SCAN.name())));
+        
+        jobExecution.setSteps(steps);
+    }
+    
+    private JobStep createJobStep(StepType type, List<String> dependencies) {
+        JobStep step = new JobStep();
+        step.setStepId(UUID.randomUUID().toString());
+        step.setStepType(type);
+        step.setStatus(StepStatus.PENDING);
+        if (dependencies != null) {
+            step.setDependsOn(dependencies);
+        }
+        return step;
+    }
+    
+    private CsiJobExecution createJobExecution(Integer csi, JobType jobType, String triggeredBy) {
+        CsiJobExecution jobExecution = new CsiJobExecution();
+        jobExecution.setJobId(UUID.randomUUID().toString());
+        jobExecution.setCsi(csi);
+        jobExecution.setJobType(jobType);
+        jobExecution.setOverallStatus(JobStatus.PENDING);
+        jobExecution.setTriggeredBy(triggeredBy);
+        jobExecution.setMetadata(new HashMap<>());
+        return jobExecution;
+    }
+    
+    private void updateJobStep(CsiJobExecution jobExecution, JobStep step) {
+        step.setLastChecked(new Date());
+        jobExecution.setLastUpdated(new Date());
+        
+        // Update completion percentage
+        updateJobCompletionPercentage(jobExecution);
+        
+        jobExecutionRepository.save(jobExecution);
+    }
+    
+    private void updateJobCompletionPercentage(CsiJobExecution jobExecution) {
+        List<JobStep> steps = jobExecution.getSteps();
+        if (steps.isEmpty()) {
+            jobExecution.setCompletionPercentage(0);
+            return;
+        }
+        
+        int totalProgress = steps.stream()
+            .mapToInt(JobStep::getProgress)
+            .sum();
+        
+        jobExecution.setCompletionPercentage(totalProgress / steps.size());
+    }
+    
+    private JobStep findStepByType(CsiJobExecution jobExecution, StepType type) {
+        return jobExecution.getSteps().stream()
+            .filter(step -> step.getStepType() == type)
+            .findFirst()
+            .orElseThrow(() -> new RuntimeException("Step not found: " + type));
+    }
+    
+    private boolean pollForCompletion(Supplier<Boolean> checkFunction, 
+                                    int maxAttempts, long intervalMs) {
+        for (int i = 0; i < maxAttempts; i++) {
+            if (checkFunction.get()) {
+                return true;
+            }
             try {
-                log.debug("Testing connection to server: {} ({})", 
-                         server.getServerId(), server.getIpAddress());
-                
-                // Test ansible connectivity
-                AnsibleResponse response = ansibleService.testConnection(
-                    server.getIpAddress(),
-                    server.getAnsibleCredentials()
-                );
-                
-                if (response.isSuccess()) {
-                    result.setStatus(ConnectionStatus.SUCCESS);
-                    result.setResponseTime(response.getExecutionTime());
-                } else {
-                    result.setStatus(ConnectionStatus.FAILED);
-                    result.setErrorMessage(response.getErrorMessage());
-                }
-                
-            } catch (Exception e) {
-                log.error("Connection test failed for server: {}", server.getServerId(), e);
-                result.setStatus(ConnectionStatus.FAILED);
-                result.setErrorMessage("Connection test error: " + e.getMessage());
+                Thread.sleep(intervalMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
             }
-            
-            return result;
-        }, executorService);
+        }
+        return false;
+    }
+    
+    private void handleJobError(String jobId, Exception e) {
+        CsiJobExecution jobExecution = jobExecutionRepository.findById(jobId).orElse(null);
+        if (jobExecution != null) {
+            jobExecution.setOverallStatus(JobStatus.FAILED);
+            jobExecution.getErrors().add(e.getMessage());
+            jobExecution.setEndTime(new Date());
+            jobExecutionRepository.save(jobExecution);
+        }
+    }
+    
+    @Autowired
+    private FEInventoryReportNewRepository inventoryRepository;
+    
+    private List<String> extractSuccessfulServers(Map<String, Object> connectivityResults, 
+                                                 String serverType) {
+        // Extract successful servers based on type
+        // Implementation depends on connectivity results structure
+        return new ArrayList<>();
+    }
+    
+    private void executeWindowsCertScan(CsiJobExecution jobExecution, 
+                                      Map<String, Object> connectivityResults) {
+        // Similar to VM scan but for Windows servers
+    }
+    
+    private void executeBcmExceptionScan(CsiJobExecution jobExecution, 
+                                       Map<String, Object> connectivityResults) {
+        // BCM exception scanning logic
+    }
+}
+
+
+package com.citi.cert_management.service;
+
+import com.citi.cert_management.entity.*;
+import com.citi.cert_management.enums.*;
+import com.citi.cert_management.repository.CsiJobExecutionRepository;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.util.Date;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+@Service
+@Slf4j
+public class JobProgressTracker {
+    
+    @Autowired
+    private CsiJobExecutionRepository jobExecutionRepository;
+    
+    @Autowired
+    private AnsibleIntegrationService ansibleIntegrationService;
+    
+    private final ScheduledExecutorService scheduler = new ScheduledThreadPoolExecutor(5);
+    private final ConcurrentHashMap<String, Runnable> pendingSteps = new ConcurrentHashMap<>();
+    
+    /**
+     * Schedule a step to be executed when dependencies are met
+     */
+    public void scheduleStepExecution(String jobId, StepType stepType, Runnable execution) {
+        String key = jobId + "-" + stepType;
+        pendingSteps.put(key, execution);
+        
+        // Schedule immediate check and then periodic checks
+        scheduler.scheduleAtFixedRate(() -> {
+            checkAndExecuteStep(jobId, stepType);
+        }, 0, 5, TimeUnit.MINUTES);
     }
     
     /**
-     * Retests failed connections
+     * Check if step dependencies are met and execute if ready
      */
-    public CompletableFuture<ConnectionTestResult> retestFailedConnections(String csiId) {
-        log.info("Retesting failed connections for CSI: {}", csiId);
-        
-        return CompletableFuture.supplyAsync(() -> {
-            List<Server> failedServers = serverRepository
-                .findByCsiIdAndConnectionStatus(csiId, ConnectionStatus.FAILED);
-            
-            if (failedServers.isEmpty()) {
-                log.info("No failed connections to retest for CSI: {}", csiId);
-                ConnectionTestResult result = new ConnectionTestResult();
-                result.setTotalServers(0);
-                return result;
+    private void checkAndExecuteStep(String jobId, StepType stepType) {
+        try {
+            CsiJobExecution jobExecution = jobExecutionRepository.findById(jobId).orElse(null);
+            if (jobExecution == null) {
+                log.warn("Job not found: {}", jobId);
+                return;
             }
             
-            log.info("Retesting {} failed connections", failedServers.size());
+            JobStep step = findStepByType(jobExecution, stepType);
+            if (step.getStatus() != StepStatus.PENDING) {
+                // Step already processed
+                removePendingStep(jobId, stepType);
+                return;
+            }
             
-            // Retest using the same logic
-            return testServerConnections(csiId).join();
-        });
+            // Check dependencies
+            if (areDependenciesMet(jobExecution, step)) {
+                String key = jobId + "-" + stepType;
+                Runnable execution = pendingSteps.get(key);
+                if (execution != null) {
+                    log.info("Executing step {} for job {}", stepType, jobId);
+                    execution.run();
+                    removePendingStep(jobId, stepType);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error checking step execution for job {} step {}", jobId, stepType, e);
+        }
     }
     
-    @Data
-    private static class ServerConnectionResult {
-        private String serverId;
-        private ConnectionStatus status;
-        private String errorMessage;
-        private Long responseTime;
+    /**
+     * Check progress of long-running ansible jobs
+     */
+    @Scheduled(fixedDelay = 300000) // Every 5 minutes
+    public void checkAnsibleJobProgress() {
+        log.debug("Checking ansible job progress");
+        
+        // Find all jobs with ansible tasks in progress
+        List<CsiJobExecution> activeJobs = jobExecutionRepository.findByOverallStatus(JobStatus.IN_PROGRESS);
+        
+        for (CsiJobExecution job : activeJobs) {
+            for (JobStep step : job.getSteps()) {
+                if (step.getStatus() == StepStatus.IN_PROGRESS && !step.getSubTaskIds().isEmpty()) {
+                    checkAnsibleTaskProgress(job, step);
+                }
+            }
+        }
+    }
+    
+    /**
+     * Check progress of specific ansible task
+     */
+    private void checkAnsibleTaskProgress(CsiJobExecution job, JobStep step) {
+        try {
+            for (String ansibleJobId : step.getSubTaskIds()) {
+                Map<String, Object> status = ansibleIntegrationService.getJobStatus(ansibleJobId);
+                
+                String jobStatus = (String) status.get("status");
+                Integer progress = (Integer) status.get("progress");
+                
+                if ("completed".equals(jobStatus)) {
+                    step.setProgress(100);
+                    step.setStatus(StepStatus.COMPLETED);
+                    step.setMessage("Ansible job completed successfully");
+                    step.setEndTime(new Date());
+                } else if ("failed".equals(jobStatus)) {
+                    step.setStatus(StepStatus.FAILED);
+                    step.setMessage("Ansible job failed: " + status.get("error"));
+                    step.setEndTime(new Date());
+                } else {
+                    // Update progress
+                    if (progress != null) {
+                        step.setProgress(progress);
+                    }
+                    step.setMessage("Ansible job in progress: " + progress + "%");
+                }
+                
+                step.setLastChecked(new Date());
+                job.setLastUpdated(new Date());
+                jobExecutionRepository.save(job);
+            }
+        } catch (Exception e) {
+            log.error("Error checking ansible job progress", e);
+        }
+    }
+    
+    /**
+     * Update overall job status based on step statuses
+     */
+    @Scheduled(fixedDelay = 600000) // Every 10 minutes
+    public void updateJobStatuses() {
+        List<CsiJobExecution> activeJobs = jobExecutionRepository
+            .findByOverallStatusIn(Arrays.asList(JobStatus.IN_PROGRESS, JobStatus.PENDING));
+        
+        for (CsiJobExecution job : activeJobs) {
+            updateJobStatus(job);
+        }
+    }
+    
+    private void updateJobStatus(CsiJobExecution job) {
+        List<JobStep> steps = job.getSteps();
+        
+        long completedCount = steps.stream()
+            .filter(s -> s.getStatus() == StepStatus.COMPLETED)
+            .count();
+        
+        long failedCount = steps.stream()
+            .filter(s -> s.getStatus() == StepStatus.FAILED)
+            .count();
+        
+        long inProgressCount = steps.stream()
+            .filter(s -> s.getStatus() == StepStatus.IN_PROGRESS)
+            .count();
+        
+        if (completedCount == steps.size()) {
+            job.setOverallStatus(JobStatus.COMPLETED);
+            job.setCompletionPercentage(100);
+            job.setEndTime(new Date());
+        } else if (failedCount > 0 && inProgressCount == 0) {
+            job.setOverallStatus(JobStatus.FAILED);
+        } else if (completedCount > 0 || failedCount > 0) {
+            job.setOverallStatus(JobStatus.PARTIALLY_COMPLETED);
+        }
+        
+        jobExecutionRepository.save(job);
+    }
+    
+    private boolean areDependenciesMet(CsiJobExecution job, JobStep step) {
+        if (step.getDependsOn() == null || step.getDependsOn().isEmpty()) {
+            return true;
+        }
+        
+        for (String dependency : step.getDependsOn()) {
+            JobStep depStep = job.getSteps().stream()
+                .filter(s -> s.getStepType().name().equals(dependency))
+                .findFirst()
+                .orElse(null);
+            
+            if (depStep == null || depStep.getStatus() != StepStatus.COMPLETED) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    private JobStep findStepByType(CsiJobExecution job, StepType type) {
+        return job.getSteps().stream()
+            .filter(step -> step.getStepType() == type)
+            .findFirst()
+            .orElse(null);
+    }
+    
+    private void removePendingStep(String jobId, StepType stepType) {
+        String key = jobId + "-" + stepType;
+        pendingSteps.remove(key);
     }
 }
 
 
 
-package com.citi.cert_management.container.service;
+package com.citi.cert_management.service;
 
-import org.springframework.stereotype.Service;
-import lombok.RequiredArgsConstructor;
+import com.citi.cert_management.entity.*;
+import com.citi.cert_management.enums.*;
+import com.citi.cert_management.repository.*;
 import lombok.extern.slf4j.Slf4j;
-import java.time.LocalDateTime;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.thymeleaf.TemplateEngine;
+import org.thymeleaf.context.Context;
+
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Service for generating various types of reports
- */
-@Slf4j
 @Service
-@RequiredArgsConstructor
-public class ReportGenerationService {
+@Slf4j
+public class CsiReportGenerationService {
     
-    private final ClmReportRepository reportRepository;
-    private final ClmJobRepository jobRepository;
-    private final ActionItemRepository actionItemRepository;
-    private final CsiMetadataRepository csiRepository;
+    @Autowired
+    private CsiJobExecutionRepository jobExecutionRepository;
+    
+    @Autowired
+    private CsiDetailsRepository csiDetailsRepository;
+    
+    @Autowired
+    private CsiReportRepository reportRepository;
+    
+    @Autowired
+    private FEInventoryReportNewRepository inventoryRepository;
+    
+    @Autowired
+    private CertificateRepository certificateRepository;
+    
+    @Autowired
+    private BcmExceptionRepository bcmExceptionRepository;
+    
+    @Autowired
+    private TemplateEngine templateEngine;
+    
+    @Autowired
+    private NotificationService notificationService;
     
     /**
-     * Generates onboarding report after initial scan
+     * Daily report generation job
      */
-    public ClmReport generateOnboardingReport(ClmJob masterJob) {
-        log.info("Generating onboarding report for job: {}", masterJob.getJobId());
+    @Scheduled(cron = "0 0 8 * * *") // Daily at 8 AM
+    public void generateDailyReports() {
+        log.info("Starting daily report generation");
         
-        ClmReport report = new ClmReport();
-        report.setReportId(UUID.randomUUID().toString());
-        report.setJobId(masterJob.getJobId());
-        report.setCsiId(masterJob.getCsiId());
-        report.setGeneratedAt(LocalDateTime.now());
-        report.setReportType(ReportType.ONBOARDING);
-        report.setFormat(ReportFormat.JSON);
+        // Find jobs eligible for report generation
+        Date currentDate = new Date();
+        List<CsiJobExecution> eligibleJobs = jobExecutionRepository
+            .findByReportGenerationEnabledTrueAndReportGenerationStartDateBefore(currentDate);
         
-        // Extract module results from job
-        List<ModuleExecutionResult> moduleResults = 
-            (List<ModuleExecutionResult>) masterJob.getJobParameters().get("moduleResults");
-        
-        if (moduleResults != null) {
-            processModuleResults(report, moduleResults);
+        for (CsiJobExecution job : eligibleJobs) {
+            try {
+                generateReportForJob(job);
+            } catch (Exception e) {
+                log.error("Error generating report for job: " + job.getJobId(), e);
+            }
         }
-        
-        // Generate consolidated action items
-        List<ActionItem> actionItems = generateConsolidatedActionItems(report, masterJob.getCsiId());
-        report.setActionItems(actionItems);
-        
-        // Save action items
-        if (!actionItems.isEmpty()) {
-            actionItemRepository.saveAll(actionItems);
-        }
-        
-        // Set retention period
-        report.setExpiresAt(LocalDateTime.now().plusMonths(3));
-        
-        return reportRepository.save(report);
     }
     
     /**
-     * Generates weekly batch report
+     * Generate report for specific job
      */
-    public ClmReport generateBatchReport(String csiId, List<ModuleExecutionResult> moduleResults) {
-        log.info("Generating batch report for CSI: {}", csiId);
+    public CsiReport generateReportForJob(CsiJobExecution job) {
+        log.info("Generating report for job: {} CSI: {}", job.getJobId(), job.getCsi());
         
-        ClmReport report = new ClmReport();
+        CsiReport report = new CsiReport();
         report.setReportId(UUID.randomUUID().toString());
-        report.setCsiId(csiId);
-        report.setGeneratedAt(LocalDateTime.now());
-        report.setReportType(ReportType.WEEKLY);
-        report.setFormat(ReportFormat.JSON);
+        report.setCsi(job.getCsi());
+        report.setJobId(job.getJobId());
+        report.setGeneratedAt(new Date());
+        report.setJobStatus(job.getOverallStatus());
+        report.setCompletionPercentage(job.getCompletionPercentage());
         
-        processModuleResults(report, moduleResults);
+        // Populate server statistics
+        populateServerStatistics(job.getCsi(), report);
         
-        // Compare with previous week's report
-        Optional<ClmReport> previousReport = reportRepository
-            .findFirstByCsiIdAndReportTypeOrderByGeneratedAtDesc(csiId, ReportType.WEEKLY);
+        // Populate certificate statistics
+        populateCertificateStatistics(job.getCsi(), report);
         
-        if (previousReport.isPresent()) {
-            addComparison(report, previousReport.get());
-        }
+        // Populate repository statistics
+        populateRepositoryStatistics(job, report);
+        
+        // Populate BCM statistics
+        populateBcmStatistics(job.getCsi(), report);
+        
+        // Generate step progress details
+        populateStepProgress(job, report);
         
         // Generate action items
-        List<ActionItem> actionItems = generateConsolidatedActionItems(report, csiId);
-        report.setActionItems(actionItems);
+        generateActionItems(job, report);
         
-        // Update existing action items
-        updateExistingActionItems(csiId, actionItems);
+        // Check if job is complete
+        report.setFinalReport(job.getCompletionPercentage() == 100);
         
-        report.setExpiresAt(LocalDateTime.now().plusMonths(3));
+        // Save report
+        report = reportRepository.save(report);
         
-        return reportRepository.save(report);
+        // Update CSI details
+        updateCsiDetailsWithReport(job.getCsi(), report);
+        
+        // Send email notification
+        sendReportEmail(job.getCsi(), report);
+        
+        return report;
     }
     
     /**
-     * Generates renewal report
+     * Populate server statistics
      */
-    public ClmReport generateRenewalReport(String csiId, RenewalResult renewalResult) {
-        log.info("Generating renewal report for CSI: {}", csiId);
+    private void populateServerStatistics(Integer csi, CsiReport report) {
+        List<FEInventoryReportNew> servers = inventoryRepository.findByCsi(csi);
         
-        ClmReport report = new ClmReport();
-        report.setReportId(UUID.randomUUID().toString());
-        report.setCsiId(csiId);
-        report.setGeneratedAt(LocalDateTime.now());
-        report.setReportType(ReportType.RENEWAL);
-        report.setFormat(ReportFormat.JSON);
+        report.setTotalServers(servers.size());
         
-        // Add renewal specific data
-        Map<String, Object> renewalData = new HashMap<>();
-        renewalData.put("renewalId", renewalResult.getRenewalId());
-        renewalData.put("certificatesRenewed", renewalResult.getCertificatesRenewed());
-        renewalData.put("status", renewalResult.getStatus());
-        renewalData.put("details", renewalResult.getDetails());
+        // Count by type
+        report.setVmCount((int) servers.stream()
+            .filter(s -> "VM".equals(s.getServerType()))
+            .count());
         
-        report.setRawData(renewalData);
+        report.setWindowsCount((int) servers.stream()
+            .filter(s -> "WINDOWS".equals(s.getServerType()))
+            .count());
         
-        report.setExpiresAt(LocalDateTime.now().plusMonths(3));
+        report.setContainersCount((int) servers.stream()
+            .filter(s -> "CONTAINER".equals(s.getServerType()))
+            .count());
         
-        return reportRepository.save(report);
-    }
-    
-    private void processModuleResults(ClmReport report, List<ModuleExecutionResult> results) {
-        for (ModuleExecutionResult result : results) {
-            switch (result.getModule()) {
-                case CLM:
-                    report.setClmResults((ClmResults) result.getResults());
-                    break;
-                case BCM:
-                    report.setBcmResults((BcmResults) result.getResults());
-                    break;
-                case EOVS:
-                    report.setEovsResults((EovsResults) result.getResults());
-                    break;
-            }
+        // Scan status
+        Map<String, List<FEInventoryReportNew>> scanStatusMap = servers.stream()
+            .collect(Collectors.groupingBy(s -> 
+                s.getScanResult() != null ? s.getScanResult().getStatus() : "NOT_SCANNED"));
+        
+        report.setSuccessfulScans(scanStatusMap.getOrDefault("SUCCESS", Collections.emptyList()).size());
+        report.setFailedScans(scanStatusMap.getOrDefault("FAILED", Collections.emptyList()).size());
+        
+        // Set scan statuses
+        if (report.getVmCount() > 0) {
+            long vmScanned = servers.stream()
+                .filter(s -> "VM".equals(s.getServerType()) && s.getScanResult() != null)
+                .count();
+            report.setVmScanStatus(String.format("%d/%d scanned", vmScanned, report.getVmCount()));
+        }
+        
+        if (report.getWindowsCount() > 0) {
+            long windowsScanned = servers.stream()
+                .filter(s -> "WINDOWS".equals(s.getServerType()) && s.getScanResult() != null)
+                .count();
+            report.setWindowsScanStatus(String.format("%d/%d scanned", windowsScanned, report.getWindowsCount()));
         }
     }
     
-    private List<ActionItem> generateConsolidatedActionItems(ClmReport report, String csiId) {
-        List<ActionItem> items = new ArrayList<>();
+    /**
+     * Populate certificate statistics
+     */
+    private void populateCertificateStatistics(Integer csi, CsiReport report) {
+        List<Certificate> certificates = certificateRepository.findByCsi(csi);
         
-        // Generate CLM action items
-        if (report.getClmResults() != null) {
-            items.addAll(generateClmActionItems(report.getClmResults(), csiId));
-        }
+        report.setTotalCertificates(certificates.size());
         
-        // Generate BCM action items
-        if (report.getBcmResults() != null) {
-            items.addAll(generateBcmActionItems(report.getBcmResults(), csiId));
-        }
+        Date now = new Date();
+        Calendar cal = Calendar.getInstance();
         
-        // Generate EOVS action items
-        if (report.getEovsResults() != null) {
-            items.addAll(generateEovsActionItems(report.getEovsResults(), csiId));
-        }
-        
-        return items;
-    }
-    
-    private List<ActionItem> generateClmActionItems(ClmResults results, String csiId) {
-        List<ActionItem> items = new ArrayList<>();
-        
-        if (results.getInventory() != null) {
-            CertificateInventory inventory = results.getInventory();
+        // Count certificates by expiry
+        for (Certificate cert : certificates) {
+            if (cert.getExpiryDate() == null) continue;
             
-            // Critical: Expired certificates
-            Integer expired = inventory.getCertsByExpiryCategory().get("EXPIRED");
-            if (expired != null && expired > 0) {
-                ActionItem item = new ActionItem();
-                item.setActionId(UUID.randomUUID().toString());
-                item.setCsiId(csiId);
-                item.setType(ActionType.CERTIFICATE_EXPIRING);
-                item.setPriority(Priority.CRITICAL);
-                item.setDescription(expired + " certificates have already expired and need immediate renewal");
-                item.setDueDate(LocalDateTime.now());
-                item.setStatus(ActionStatus.OPEN);
-                item.setCreatedAt(LocalDateTime.now());
-                items.add(item);
-            }
-            
-            // High: Expiring in 30 days
-            Integer expiring30 = inventory.getCertsByExpiryCategory().get("30_DAYS");
-            if (expiring30 != null && expiring30 > 0) {
-                ActionItem item = new ActionItem();
-                item.setActionId(UUID.randomUUID().toString());
-                item.setCsiId(csiId);
-                item.setType(ActionType.CERTIFICATE_EXPIRING);
-                item.setPriority(Priority.HIGH);
-                item.setDescription(expiring30 + " certificates expiring within 30 days");
-                item.setDueDate(LocalDateTime.now().plusDays(7));
-                item.setStatus(ActionStatus.OPEN);
-                item.setCreatedAt(LocalDateTime.now());
-                items.add(item);
-            }
-        }
-        
-        // Connection failures
-        if (results.getVmDiscoveryResults() != null && 
-            !results.getVmDiscoveryResults().getScanErrors().isEmpty()) {
-            ActionItem item = new ActionItem();
-            item.setActionId(UUID.randomUUID().toString());
-            item.setCsiId(csiId);
-            item.setType(ActionType.CONNECTION_FAILED);
-            item.setPriority(Priority.MEDIUM);
-            item.setDescription("Failed to scan " + 
-                results.getVmDiscoveryResults().getScanErrors().size() + " servers");
-            item.setDueDate(LocalDateTime.now().plusDays(3));
-            item.setStatus(ActionStatus.OPEN);
-            item.setCreatedAt(LocalDateTime.now());
-            items.add(item);
-        }
-        
-        return items;
-    }
-    
-    private List<ActionItem> generateBcmActionItems(BcmResults results, String csiId) {
-        List<ActionItem> items = new ArrayList<>();
-        
-        if (results.getExceptionsFound() > 0) {
-            // Group by severity
-            Map<Priority, Integer> exceptionsBySeverity = categorizeExceptions(results.getExceptions());
-            
-            for (Map.Entry<Priority, Integer> entry : exceptionsBySeverity.entrySet()) {
-                if (entry.getValue() > 0) {
-                    ActionItem item = new ActionItem();
-                    item.setActionId(UUID.randomUUID().toString());
-                    item.setCsiId(csiId);
-                    item.setType(ActionType.BCM_EXCEPTION);
-                    item.setPriority(entry.getKey());
-                    item.setDescription(entry.getValue() + " BCM exceptions require attention");
-                    item.setDueDate(calculateDueDate(entry.getKey()));
-                    item.setStatus(ActionStatus.OPEN);
-                    item.setCreatedAt(LocalDateTime.now());
-                    items.add(item);
+            if (cert.getExpiryDate().before(now)) {
+                report.setExpiredCerts(report.getExpiredCerts() + 1);
+            } else {
+                long daysUntilExpiry = (cert.getExpiryDate().getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+                
+                if (daysUntilExpiry <= 30) {
+                    report.setExpiringIn30Days(report.getExpiringIn30Days() + 1);
+                } else if (daysUntilExpiry <= 60) {
+                    report.setExpiringIn60Days(report.getExpiringIn60Days() + 1);
+                } else if (daysUntilExpiry <= 90) {
+                    report.setExpiringIn90Days(report.getExpiringIn90Days() + 1);
                 }
             }
-        }
-        
-        return items;
-    }
-    
-    private List<ActionItem> generateEovsActionItems(EovsResults results, String csiId) {
-        List<ActionItem> items = new ArrayList<>();
-        
-        if (results.getPendingAcknowledgment() > 0) {
-            ActionItem item = new ActionItem();
-            item.setActionId(UUID.randomUUID().toString());
-            item.setCsiId(csiId);
-            item.setType(ActionType.EOVS_ACKNOWLEDGMENT_REQUIRED);
-            item.setPriority(Priority.HIGH);
-            item.setDescription(results.getPendingAcknowledgment() + 
-                " EOVS vulnerabilities require user acknowledgment");
-            item.setDueDate(LocalDateTime.now().plusDays(5));
-            item.setStatus(ActionStatus.OPEN);
-            item.setCreatedAt(LocalDateTime.now());
-            items.add(item);
-        }
-        
-        return items;
-    }
-    
-    private void updateExistingActionItems(String csiId, List<ActionItem> newItems) {
-        // Get existing open action items
-        List<ActionItem> existingItems = actionItemRepository
-            .findByCsiIdAndStatus(csiId, ActionStatus.OPEN);
-        
-        // Check if any can be closed
-        for (ActionItem existing : existingItems) {
-            boolean stillValid = newItems.stream()
-                .anyMatch(item -> item.getType() == existing.getType() && 
-                         item.getDescription().equals(existing.getDescription()));
             
-            if (!stillValid) {
-                existing.setStatus(ActionStatus.RESOLVED);
-                existing.setResolvedAt(LocalDateTime.now());
-                actionItemRepository.save(existing);
+            // Check truststore expiry
+            if (cert.isTrustStore() && daysUntilExpiry <= 60) {
+                report.setTrustStoreExpiry(report.getTrustStoreExpiry() + 1);
             }
         }
     }
     
-    private LocalDateTime calculateDueDate(Priority priority) {
-        switch (priority) {
-            case CRITICAL:
-                return LocalDateTime.now().plusDays(1);
-            case HIGH:
-                return LocalDateTime.now().plusDays(3);
-            case MEDIUM:
-                return LocalDateTime.now().plusDays(7);
-            case LOW:
-                return LocalDateTime.now().plusDays(14);
-            default:
-                return LocalDateTime.now().plusDays(7);
+    /**
+     * Populate repository statistics
+     */
+    private void populateRepositoryStatistics(CsiJobExecution job, CsiReport report) {
+        CsiDetails csiDetails = csiDetailsRepository.findByCsi(job.getCsi());
+        
+        int totalRepos = 0;
+        if (csiDetails.getBitbucketRepositories() != null) {
+            totalRepos += csiDetails.getBitbucketRepositories().size();
         }
-    }
-}
-
-
-
-package com.citi.cert_management.container.dto;
-
-import lombok.Data;
-import lombok.Builder;
-
-/**
- * Summary of discovery operations
- */
-@Data
-@Builder
-public class DiscoverySummary {
-    private String discoveryType;
-    private int totalServersScanned;
-    private int serversWithCertificates;
-    private int totalCertificatesFound;
-    private int scanErrors;
-    private double successRate;
-    private LocalDateTime executedAt;
-    private long executionTimeMs;
-}
-
-package com.citi.cert_management.container.dto;
-
-import lombok.Data;
-import lombok.Builder;
-import java.util.Map;
-
-/**
- * Summary of certificate inventory
- */
-@Data
-@Builder
-public class CertificateInventorySummary {
-    private int totalCertificates;
-    private Map<String, Integer> certificatesByType;
-    private Map<String, Integer> certificatesByExpiry;
-    private int expiredCount;
-    private int expiringIn30Days;
-    private int expiringIn60Days;
-    private int validCount;
-    private int autoRenewalEligible;
-}
-
-
-package com.citi.cert_management.container.dto;
-
-import lombok.Data;
-import lombok.Builder;
-import java.time.LocalDateTime;
-
-/**
- * Summary view of a report for list displays
- */
-@Data
-@Builder
-public class ReportSummary {
-    private String reportId;
-    private String csiId;
-    private ReportType reportType;
-    private LocalDateTime generatedAt;
-    private String jobId;
-    private int totalCertificates;
-    private int actionItemCount;
-    private int criticalItemCount;
-    private boolean emailSent;
-    private LocalDateTime emailSentAt;
-}
-
-package com.citi.cert_management.container.model;
-
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
-import lombok.Data;
-import java.time.LocalDateTime;
-
-/**
- * Action item requiring attention
- */
-@Data
-@Document(collection = "action_items")
-public class ActionItem {
-    @Id
-    private String actionId;
-    private String csiId;
-    private ActionType type;
-    private Priority priority;
-    private String description;
-    private String targetCertificate;
-    private String targetServer;
-    private LocalDateTime dueDate;
-    private ActionStatus status;
-    private LocalDateTime createdAt;
-    private LocalDateTime resolvedAt;
-    private String resolvedBy;
-    private boolean escalated;
-    private LocalDateTime escalatedAt;
-    private String assignedTo;
-    private String notes;
-}
-
-package com.citi.cert_management.container.dto;
-
-import lombok.Data;
-import lombok.Builder;
-
-/**
- * Summary view of action items
- */
-@Data
-@Builder
-public class ActionItemSummary {
-    private String actionId;
-    private ActionType type;
-    private Priority priority;
-    private String shortDescription;
-    private int daysOverdue;
-    private boolean escalated;
-}
-
-package com.citi.cert_management.container.dto;
-
-import lombok.Data;
-import javax.validation.constraints.NotNull;
-import java.util.Map;
-
-/**
- * Request to execute module-specific operation
- */
-@Data
-public class ModuleOperationRequest {
-    @NotNull
-    private String operation;
-    
-    private Map<String, Object> parameters;
-    private boolean forceExecution;
-    private String reason;
-}
-
-package com.citi.cert_management.container.dto;
-
-import lombok.Data;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-
-/**
- * Response for job initiation requests
- */
-@Data
-@AllArgsConstructor
-@Builder
-public class JobResponse {
-    private String jobId;
-    private String message;
-    private JobStatus status;
-    private LocalDateTime estimatedCompletion;
-}
-
-package com.citi.cert_management.container.dto;
-
-import lombok.Data;
-import lombok.Builder;
-
-/**
- * Response for remediation requests
- */
-@Data
-@Builder
-public class RemediationResponse {
-    private boolean success;
-    private String remediationId;
-    private String message;
-    private int itemsRemediated;
-    private int itemsFailed;
-    private LocalDateTime completedAt;
-}
-
-package com.citi.cert_management.container.model;
-
-import lombok.Data;
-import lombok.Builder;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * Result of remediation operation
- */
-@Data
-@Builder
-public class RemediationResult {
-    private String remediationId;
-    private boolean success;
-    private String status;
-    private String message;
-    private String moduleType;
-    private List<String> certificatesRenewed;
-    private Map<String, Object> details;
-    private int totalItems;
-    private int successfulItems;
-    private int failedItems;
-    private LocalDateTime startTime;
-    private LocalDateTime endTime;
-    private List<RemediationError> errors;
-}
-
-@Data
-public class RemediationError {
-    private String itemId;
-    private String errorCode;
-    private String errorMessage;
-    private LocalDateTime occurredAt;
-}
-
-package com.citi.cert_management.container.model;
-
-import lombok.Data;
-import java.util.List;
-import java.util.Map;
-
-/**
- * Certificate impact assessment results
- */
-@Data
-public class ImpactAssessment {
-    private String assessmentId;
-    private String csiId;
-    private LocalDateTime assessedAt;
-    
-    // Impact analysis
-    private int totalCertificatesAnalyzed;
-    private int criticalCertificates;
-    private int highImpactCertificates;
-    private int mediumImpactCertificates;
-    private int lowImpactCertificates;
-    
-    // Dependencies
-    private Map<String, List<String>> certificateDependencies;
-    private List<ServiceImpact> impactedServices;
-    private List<ApplicationImpact> impactedApplications;
-    
-    // Risk factors
-    private List<String> identifiedRisks;
-    private OverallRiskLevel overallRisk;
-    
-    // Recommendations
-    private List<String> recommendations;
-    private List<String> immediateActions;
-}
-
-@Data
-public class ServiceImpact {
-    private String serviceName;
-    private String certificateId;
-    private ImpactLevel impactLevel;
-    private String description;
-    private List<String> affectedEndpoints;
-}
-
-@Data
-public class ApplicationImpact {
-    private String applicationName;
-    private String applicationId;
-    private List<String> affectedCertificates;
-    private ImpactLevel impactLevel;
-    private int usersAffected;
-}
-
-public enum ImpactLevel {
-    CRITICAL, HIGH, MEDIUM, LOW
-}
-
-public enum OverallRiskLevel {
-    VERY_HIGH, HIGH, MODERATE, LOW, MINIMAL
-}
-
-package com.citi.cert_management.container.model;
-
-import lombok.Data;
-import java.util.List;
-import java.util.Map;
-
-/**
- * Risk assessment for certificates and configurations
- */
-@Data
-public class RiskAssessment {
-    private String assessmentId;
-    private String csiId;
-    private LocalDateTime assessedAt;
-    
-    // Certificate risks
-    private List<CertificateRisk> certificateRisks;
-    
-    // Configuration risks
-    private List<ConfigurationRisk> configurationRisks;
-    
-    // Compliance risks
-    private List<ComplianceRisk> complianceRisks;
-    
-    // Overall assessment
-    private RiskScore overallRiskScore;
-    private String riskSummary;
-    private List<RiskMitigation> recommendedMitigations;
-}
-
-@Data
-public class CertificateRisk {
-    private String certificateId;
-    private String riskType;
-    private RiskLevel level;
-    private String description;
-    private LocalDateTime identifiedAt;
-    private boolean mitigated;
-}
-
-@Data
-public class ConfigurationRisk {
-    private String serverId;
-    private String configType;
-    private String finding;
-    private RiskLevel level;
-    private String recommendation;
-}
-
-@Data
-public class ComplianceRisk {
-    private String standard;
-    private String requirement;
-    private boolean compliant;
-    private String gap;
-    private String remediation;
-}
-
-@Data
-public class RiskScore {
-    private int score;
-    private RiskLevel level;
-    private Map<String, Integer> categoryScores;
-}
-
-@Data
-public class RiskMitigation {
-    private String mitigationId;
-    private String description;
-    private Priority priority;
-    private String estimatedEffort;
-    private List<String> steps;
-}
-
-public enum RiskLevel {
-    CRITICAL, HIGH, MEDIUM, LOW, MINIMAL
-}
-
-package com.citi.cert_management.container.model;
-
-import lombok.Data;
-import lombok.Builder;
-import java.time.LocalDateTime;
-
-/**
- * Result of synchronization operation
- */
-@Data
-@Builder
-public class SyncResult {
-    private boolean success;
-    private int recordsProcessed;
-    private int recordsFailed;
-    private int recordsSkipped;
-    private String errorMessage;
-    private String syncType;
-    private LocalDateTime startedAt;
-    private LocalDateTime completedAt;
-    private long durationMs;
-    private Map<String, Object> metadata;
-}
-
-package com.citi.cert_management.container.model;
-
-import lombok.Data;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * Result of repository scanning operation
- */
-@Data
-public class RepositoryScanResult {
-    private int repositoriesFound;
-    private int repositoriesScanned;
-    private int repositoriesFailed;
-    private List<Repository> repositories;
-    private List<CertificateLocation> certificateLocations;
-    private LocalDateTime scanCompletedAt;
-    private long scanDurationMs;
-    private Map<String, Integer> certificatesByRepository;
-    private List<ScanError> errors;
-}
-
-@Data
-public class Repository {
-    private String repositoryId;
-    private String name;
-    private String cloneUrl;
-    private String branch;
-    private RepositoryType type;
-    private LocalDateTime lastScanned;
-    private int certificatesFound;
-}
-
-@Data
-public class ScanError {
-    private String repository;
-    private String errorType;
-    private String errorMessage;
-    private LocalDateTime occurredAt;
-}
-
-public enum RepositoryType {
-    BITBUCKET, GITHUB, GITLAB
-}
-
-package com.citi.cert_management.container.repository;
-
-import org.springframework.data.mongodb.repository.MongoRepository;
-import org.springframework.stereotype.Repository;
-import java.util.Optional;
-import java.util.List;
-
-/**
- * Repository for CSI metadata operations
- */
-@Repository
-public interface CsiMetadataRepository extends MongoRepository<CsiDetails, String> {
-    
-    Optional<CsiDetails> findByCsiId(String csiId);
-    
-    boolean existsByCsiId(String csiId);
-    
-    List<CsiDetails> findByActiveTrue();
-    
-    List<CsiDetails> findByActiveTrueAndModuleSubscriptions_Module(ModuleType module);
-    
-    List<CsiDetails> findByRequestorSoeid(String soeid);
-    
-    List<CsiDetails> findByEnvironment(String environment);
-    
-    List<CsiDetails> findByOnboardedAtBetween(LocalDateTime start, LocalDateTime end);
-}
-
-package com.citi.cert_management.container.repository;
-
-import org.springframework.data.mongodb.repository.MongoRepository;
-import org.springframework.stereotype.Repository;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Optional;
-
-/**
- * Repository for CLM job operations
- */
-@Repository
-public interface ClmJobRepository extends MongoRepository<ClmJob, String> {
-    
-    Optional<ClmJob> findByJobId(String jobId);
-    
-    List<ClmJob> findByCsiId(String csiId);
-    
-    List<ClmJob> findByCsiIdAndStatus(String csiId, JobStatus status);
-    
-    List<ClmJob> findByStatusIn(List<JobStatus> statuses);
-    
-    List<ClmJob> findByJobTypeAndStatusAndStartTimeBetween(
-        JobType jobType, JobStatus status, LocalDateTime start, LocalDateTime end);
-    
-    List<ClmJob> findByTriggeredBy(String triggeredBy);
-    
-    List<ClmJob> findByModuleType(ModuleType moduleType);
-    
-    List<ClmJob> findByStatusAndStartTimeBefore(JobStatus status, LocalDateTime cutoff);
-}
-
-package com.citi.cert_management.container.exception;
-
-/**
- * Base exception for CLM system
- */
-public class ClmException extends RuntimeException {
-    public ClmException(String message) {
-        super(message);
-    }
-    
-    public ClmException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * CSI related exceptions
- */
-public class CsiNotFoundException extends ClmException {
-    public CsiNotFoundException(String message) {
-        super(message);
-    }
-}
-
-public class CsiAlreadyExistsException extends ClmException {
-    public CsiAlreadyExistsException(String message) {
-        super(message);
-    }
-}
-
-/**
- * Module related exceptions
- */
-public class ModuleNotSubscribedException extends ClmException {
-    public ModuleNotSubscribedException(String message) {
-        super(message);
-    }
-}
-
-public class ModuleExecutionException extends ClmException {
-    public ModuleExecutionException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Job related exceptions
- */
-public class JobNotFoundException extends ClmException {
-    public JobNotFoundException(String message) {
-        super(message);
-    }
-}
-
-public class JobExecutionException extends ClmException {
-    public JobExecutionException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Sync related exceptions
- */
-public class SyncException extends ClmException {
-    public SyncException(String message) {
-        super(message);
-    }
-    
-    public SyncException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Discovery related exceptions
- */
-public class DiscoveryException extends ClmException {
-    public DiscoveryException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Report related exceptions
- */
-public class ReportNotFoundException extends ClmException {
-    public ReportNotFoundException(String message) {
-        super(message);
-    }
-}
-
-public class ReportGenerationException extends ClmException {
-    public ReportGenerationException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Certificate related exceptions
- */
-public class CertificateNotFoundException extends ClmException {
-    public CertificateNotFoundException(String message) {
-        super(message);
-    }
-}
-
-public class CertificateRenewalException extends ClmException {
-    public CertificateRenewalException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Assessment related exceptions
- */
-public class AssessmentException extends ClmException {
-    public AssessmentException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Remediation related exceptions
- */
-public class RemediationException extends ClmException {
-    public RemediationException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Notification related exceptions
- */
-public class NotificationException extends ClmException {
-    public NotificationException(String message) {
-        super(message);
-    }
-    
-    public NotificationException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-/**
- * Validation exception
- */
-public class ValidationException extends ClmException {
-    public ValidationException(String message) {
-        super(message);
-    }
-}
-
-/**
- * External service exceptions
- */
-public class ExternalServiceException extends ClmException {
-    private String serviceName;
-    
-    public ExternalServiceException(String serviceName, String message, Throwable cause) {
-        super(message, cause);
-        this.serviceName = serviceName;
-    }
-    
-    public String getServiceName() {
-        return serviceName;
-    }
-}
-
-// In EnhancedJobOrchestrationService or as a utility method
-
-/**
- * Checks if all sync operations are complete and CSI can proceed with discovery
- */
-private boolean canProceedWithDiscovery(CsiDetails csi) {
-    return csi.getServerSyncStatus() != null && 
-           csi.getServerSyncStatus().getState() == SyncState.COMPLETED &&
-           csi.getCertificateSyncStatus() != null && 
-           csi.getCertificateSyncStatus().getState() == SyncState.COMPLETED &&
-           csi.getRepositorySyncStatus() != null && 
-           csi.getRepositorySyncStatus().getState() == SyncState.COMPLETED;
-}
-
-// In CsiService or as a utility method
-
-/**
- * Gets module subscription for a specific module type
- */
-public ModuleSubscription getModuleSubscription(CsiDetails csi, ModuleType moduleType) {
-    return csi.getModuleSubscriptions().stream()
-        .filter(subscription -> subscription.getModule() == moduleType)
-        .findFirst()
-        .orElse(null);
-}
-
-package com.citi.cert_management.container.executor;
-
-/**
- * Interface for module-specific execution logic
- */
-public interface ModuleExecutor {
-    /**
-     * Executes module-specific operations
-     * 
-     * @param csi CSI details
-     * @param servers List of connected servers
-     * @param subscription Module subscription with configuration
-     * @return Execution result
-     */
-    ModuleExecutionResult execute(CsiDetails csi, List<Server> servers, 
-                                 ModuleSubscription subscription);
-    
-    /**
-     * Gets the module type this executor handles
-     * 
-     * @return Module type
-     */
-    ModuleType getModuleType();
-    
-    /**
-     * Validates if the module can be executed
-     * 
-     * @param csi CSI details
-     * @return true if can execute, false otherwise
-     */
-    default boolean canExecute(CsiDetails csi) {
-        ModuleSubscription subscription = csi.getModuleSubscriptions().stream()
-            .filter(s -> s.getModule() == getModuleType())
+        if (csiDetails.getGithubRepositories() != null) {
+            totalRepos += csiDetails.getGithubRepositories().size();
+        }
+        
+        report.setTotalRepositories(totalRepos);
+        
+        // Get repository scan results from job step
+        JobStep repoScanStep = job.getSteps().stream()
+            .filter(s -> s.getStepType() == StepType.REPO_CERT_USAGE_SCAN)
             .findFirst()
             .orElse(null);
         
-        return subscription != null && subscription.isSelected();
+        if (repoScanStep != null && repoScanStep.getResults() != null) {
+            report.setScannedRepositories((Integer) repoScanStep.getResults()
+                .getOrDefault("scannedRepositories", 0));
+            report.setCertificatesInCode((Integer) repoScanStep.getResults()
+                .getOrDefault("certificatesInCode", 0));
+        }
+    }
+    
+    /**
+     * Populate BCM statistics
+     */
+    private void populateBcmStatistics(Integer csi, CsiReport report) {
+        List<BcmException> exceptions = bcmExceptionRepository.findByCsi(csi);
+        
+        report.setBcmExceptions(exceptions.size());
+        report.setCriticalExceptions((int) exceptions.stream()
+            .filter(e -> "CRITICAL".equals(e.getSeverity()))
+            .count());
+    }
+    
+    /**
+     * Populate step progress
+     */
+    private void populateStepProgress(CsiJobExecution job, CsiReport report) {
+        List<StepProgress> progressList = new ArrayList<>();
+        
+        for (JobStep step : job.getSteps()) {
+            StepProgress progress = new StepProgress();
+            progress.setStepType(step.getStepType().name());
+            progress.setStatus(step.getStatus().name());
+            progress.setProgress(step.getProgress());
+            progress.setMessage(step.getMessage());
+            progress.setStartTime(step.getStartTime());
+            progress.setEndTime(step.getEndTime());
+            
+            progressList.add(progress);
+        }
+        
+        report.setStepProgressList(progressList);
+    }
+    
+    /**
+     * Generate action items based on findings
+     */
+    private void generateActionItems(CsiJobExecution job, CsiReport report) {
+        List<String> actionItems = new ArrayList<>();
+        List<String> highRiskItems = new ArrayList<>();
+        List<String> mediumRiskItems = new ArrayList<>();
+        
+        // Check for expired certificates
+        if (report.getExpiredCerts() > 0) {
+            highRiskItems.add(String.format("%d expired certificates require immediate renewal", 
+                report.getExpiredCerts()));
+        }
+        
+        // Check for soon-to-expire certificates
+        if (report.getExpiringIn30Days() > 0) {
+            highRiskItems.add(String.format("%d certificates expiring within 30 days", 
+                report.getExpiringIn30Days()));
+        }
+        
+        // Check for failed scans
+        if (report.getFailedScans() > 0) {
+            mediumRiskItems.add(String.format("%d servers failed certificate scanning", 
+                report.getFailedScans()));
+        }
+        
+        // Check for ansible connectivity issues
+        JobStep ansibleStep = job.getSteps().stream()
+            .filter(s -> s.getStepType() == StepType.ANSIBLE_CONNECTIVITY_TEST)
+            .findFirst()
+            .orElse(null);
+        
+        if (ansibleStep != null && ansibleStep.getStatus() == StepStatus.FAILED) {
+            highRiskItems.add("Ansible connectivity test failed - manual intervention required");
+        }
+        
+        // Check for certificates in code
+        if (report.getCertificatesInCode() > 0) {
+            actionItems.add(String.format("%d certificates found in code repositories - review required", 
+                report.getCertificatesInCode()));
+        }
+        
+        // Check BCM exceptions
+        if (report.getCriticalExceptions() > 0) {
+            highRiskItems.add(String.format("%d critical BCM exceptions detected", 
+                report.getCriticalExceptions()));
+        }
+        
+        report.setHighRiskItems(highRiskItems);
+        report.setMediumRiskItems(mediumRiskItems);
+        report.setActionItems(actionItems);
+    }
+    
+    /**
+     * Update CSI details with latest report
+     */
+    private void updateCsiDetailsWithReport(Integer csi, CsiReport report) {
+        CsiDetails csiDetails = csiDetailsRepository.findByCsi(csi);
+        if (csiDetails != null) {
+            csiDetails.setLastReportGenerationTime(report.getGeneratedAt());
+            csiDetails.setLastReportId(report.getReportId());
+            
+            if (report.isFinalReport() && report.getJobStatus() == JobStatus.COMPLETED) {
+                csiDetails.setJobStatus(JobStatus.COMPLETED);
+                csiDetails.setLastSuccessfulSync(new Date());
+            }
+            
+            csiDetailsRepository.save(csiDetails);
+        }
+    }
+    
+    /**
+     * Send report email
+     */
+    private void sendReportEmail(Integer csi, CsiReport report) {
+        CsiDetails csiDetails = csiDetailsRepository.findByCsi(csi);
+        if (csiDetails == null) {
+            log.warn("CSI details not found for CSI: {}", csi);
+            return;
+        }
+        
+        // Prepare email recipients
+        Map<String, List<String>> recipients = new HashMap<>();
+        recipients.put("to", Arrays.asList(csiDetails.getEmail()));
+        
+        if (csiDetails.getNotificationEmails() != null && !csiDetails.getNotificationEmails().isEmpty()) {
+            recipients.put("cc", csiDetails.getNotificationEmails());
+        }
+        
+        // Generate HTML content
+        String htmlContent = generateHtmlReport(report, csiDetails);
+        
+        // Prepare email data
+        Map<String, Object> emailData = new HashMap<>();
+        emailData.put("recipients", recipients);
+        emailData.put("subject", String.format("CSI %d - Certificate Management Report - %s", 
+            csi, new SimpleDateFormat("yyyy-MM-dd").format(report.getGeneratedAt())));
+        emailData.put("body", htmlContent);
+        emailData.put("priority", report.getHighRiskItems().isEmpty() ? "NORMAL" : "HIGH");
+        
+        try {
+            notificationService.sendEmail(emailData);
+            log.info("Report email sent for CSI: {}", csi);
+        } catch (Exception e) {
+            log.error("Error sending report email for CSI: " + csi, e);
+        }
+    }
+    
+    /**
+     * Generate HTML report content
+     */
+    public String generateHtmlReport(CsiReport report, CsiDetails csiDetails) {
+        Context context = new Context();
+        context.setVariable("report", report);
+        context.setVariable("csiDetails", csiDetails);
+        context.setVariable("generatedDate", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+            .format(report.getGeneratedAt()));
+        context.setVariable("isPartialReport", !report.isFinalReport());
+        context.setVariable("completionClass", getCompletionClass(report.getCompletionPercentage()));
+        
+        return templateEngine.process("csi-report-template", context);
+    }
+    
+    private String getCompletionClass(Integer percentage) {
+        if (percentage >= 100) return "complete";
+        if (percentage >= 75) return "high-progress";
+        if (percentage >= 50) return "medium-progress";
+        if (percentage >= 25) return "low-progress";
+        return "minimal-progress";
     }
 }
 
+
+package com.citi.cert_management.scheduler;
+
+import com.citi.cert_management.entity.*;
+import com.citi.cert_management.enums.*;
+import com.citi.cert_management.repository.*;
+import com.citi.cert_management.service.*;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import java.util.Calendar;
+import java.util.Date;
+import java.util.List;
+
+@Component
+@Slf4j
+public class JobScheduler {
+    
+    @Autowired
+    private CsiDetailsRepository csiDetailsRepository;
+    
+    @Autowired
+    private CsiJobExecutionRepository jobExecutionRepository;
+    
+    @Autowired
+    private CsiJobOrchestrator jobOrchestrator;
+    
+    @Autowired
+    private CsiReportGenerationService reportService;
+    
+    /**
+     * Weekly sync job - runs every Sunday at 2 AM
+     */
+    @Scheduled(cron = "0 0 2 * * SUN")
+    public void weeklySync() {
+        log.info("Starting weekly sync job");
+        
+        // Get all active CSIs
+        List<CsiDetails> activeCsis = csiDetailsRepository.findByActiveTrue();
+        
+        for (CsiDetails csi : activeCsis) {
+            try {
+                // Check if last sync was more than 6 days ago
+                if (shouldRunWeeklySync(csi)) {
+                    log.info("Initiating weekly sync for CSI: {}", csi.getCsi());
+                    jobOrchestrator.initiateOnboardingJob(csi.getCsi(), "WEEKLY_SYNC_SCHEDULER");
+                }
+            } catch (Exception e) {
+                log.error("Error in weekly sync for CSI: " + csi.getCsi(), e);
+            }
+        }
+    }
+    
+    /**
+     * Check if weekly sync should run for CSI
+     */
+    private boolean shouldRunWeeklySync(CsiDetails csi) {
+        if (csi.getLastJobExecutionTime() == null) {
+            return true;
+        }
+        
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.DAY_OF_MONTH, -6);
+        
+        return csi.getLastJobExecutionTime().before(cal.getTime());
+    }
+    
+    /**
+     * Cleanup old reports - runs daily at 3 AM
+     */
+    @Scheduled(cron = "0 0 3 * * *")
+    public void cleanupOldReports() {
+        log.info("Starting cleanup of old reports");
+        
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.DAY_OF_MONTH, -30); // Keep reports for 30 days
+        Date cutoffDate = cal.getTime();
+        
+        int deletedCount = reportRepository.deleteByGeneratedAtBefore(cutoffDate);
+        log.info("Deleted {} old reports", deletedCount);
+    }
+    
+    /**
+     * Check stalled jobs - runs every hour
+     */
+    @Scheduled(cron = "0 0 * * * *")
+    public void checkStalledJobs() {
+        log.info("Checking for stalled jobs");
+        
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.HOUR_OF_DAY, -24); // Jobs older than 24 hours
+        Date cutoffDate = cal.getTime();
+        
+        List<CsiJobExecution> stalledJobs = jobExecutionRepository
+            .findByOverallStatusAndStartTimeBefore(JobStatus.IN_PROGRESS, cutoffDate);
+        
+        for (CsiJobExecution job : stalledJobs) {
+            log.warn("Found stalled job: {} for CSI: {}", job.getJobId(), job.getCsi());
+            
+            // Check if job has any recent activity
+            if (job.getLastUpdated() != null && job.getLastUpdated().after(cutoffDate)) {
+                continue; // Job has recent activity
+            }
+            
+            // Mark job as partially completed
+            job.setOverallStatus(JobStatus.PARTIALLY_COMPLETED);
+            job.getWarnings().add("Job marked as partially completed due to inactivity");
+            jobExecutionRepository.save(job);
+            
+            // Generate final report
+            reportService.generateReportForJob(job);
+        }
+    }
+    
+    @Autowired
+    private CsiReportRepository reportRepository;
+}
+
+
+
+package com.citi.cert_management.service;
+
+import org.springframework.stereotype.Service;
+import java.util.Map;
+
+@Service
+public interface CasIntegrationService {
+    String initiateServerSync(Integer csi);
+    boolean checkSyncStatus(String syncJobId);
+    Map<String, Object> getSyncResults(String syncJobId);
+}
+
+
+package com.citi.cert_management.service;
+
+import org.springframework.stereotype.Service;
+import java.util.Map;
+
+@Service
+public interface VaultIntegrationService {
+    Map<String, Object> syncCertificates(Integer csi);
+}
+
+package com.citi.cert_management.service;
+
+import com.citi.cert_management.entity.FEInventoryReportNew;
+import org.springframework.stereotype.Service;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public interface AnsibleIntegrationService {
+    Map<String, Object> testConnectivity(List<FEInventoryReportNew> servers);
+    String initiateVmCertScan(Integer csi, List<String> servers);
+    String initiateWindowsCertScan(Integer csi, List<String> servers);
+    Map<String, Object> getJobStatus(String jobId);
+}
+
+package com.citi.cert_management.repository;
+
+import com.citi.cert_management.entity.CsiJobExecution;
+import com.citi.cert_management.enums.JobStatus;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.Date;
+import java.util.List;
+
+@Repository
+public interface CsiJobExecutionRepository extends MongoRepository<CsiJobExecution, String> {
+    List<CsiJobExecution> findByOverallStatus(JobStatus status);
+    List<CsiJobExecution> findByOverallStatusIn(List<JobStatus> statuses);
+    List<CsiJobExecution> findByReportGenerationEnabledTrueAndReportGenerationStartDateBefore(Date date);
+    List<CsiJobExecution> findByOverallStatusAndStartTimeBefore(JobStatus status, Date date);
+    CsiJobExecution findTopByCsiOrderByStartTimeDesc(Integer csi);
+}
+
+
+package com.citi.cert_management.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.Executor;
+
+@Configuration
+@EnableAsync
+@EnableScheduling
+public class AsyncConfiguration {
+    
+    @Bean(name = "taskExecutor")
+    public Executor taskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(5);
+        executor.setMaxPoolSize(10);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("CSI-Async-");
+        executor.initialize();
+        return executor;
+    }
+}
+
+
+7. Enhancement Recommendations for Existing Methods
+7.1 Enhanced CsiMetadataService.java
+// Add these methods to existing CsiMetadataService
+
+public class CsiMetadataService {
+    
+    /**
+     * Enhanced method to fetch CSI details from Archcenter with retry logic
+     */
+    public CsiDetails fetchCsiDetailsFromArchcenter(Integer csi) {
+        int maxRetries = 3;
+        int retryCount = 0;
+        
+        while (retryCount < maxRetries) {
+            try {
+                // Existing archcenter call logic
+                Document doc = parseXml(response.getBody());
+                CsiDetails details = extractCsiDetails(csi, doc);
+                
+                // Validate required fields
+                validateCsiDetails(details);
+                
+                return details;
+            } catch (Exception e) {
+                retryCount++;
+                if (retryCount >= maxRetries) {
+                    throw new RuntimeException("Failed to fetch CSI details after " + maxRetries + " attempts", e);
+                }
+                log.warn("Retry {} for CSI {}: {}", retryCount, csi, e.getMessage());
+                try {
+                    Thread.sleep(1000 * retryCount); // Exponential backoff
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Enhanced extraction with null safety
+     */
+    private void extractCsiDetails(Integer csiId, CsiDetails csi, NodeList nodeList, String email) {
+        // Existing extraction logic with enhanced null checks
+        for (int itr = 0; itr < nodeList.getLength(); itr++) {
+            Node node = nodeList.item(itr);
+            if (node.getNodeType() == Node.ELEMENT_NODE) {
+                Element eElement = (Element) node;
+                String key = eElement.getElementsByTagName("key").item(0).getTextContent();
+                String value = getElementValue(eElement, "value");
+                
+                // Use safe extraction
+                safeSetCsiField(csi, key, value);
+            }
+        }
+    }
+    
+    private String getElementValue(Element element, String tagName) {
+        NodeList nodeList = element.getElementsByTagName(tagName);
+        if (nodeList != null && nodeList.getLength() > 0) {
+            Node node = nodeList.item(0);
+            if (node != null && node.getTextContent() != null) {
+                return node.getTextContent().trim();
+            }
+        }
+        return "";
+    }
+    
+    private void safeSetCsiField(CsiDetails csi, String key, String value) {
+        if (key == null || value == null || value.isEmpty()) {
+            return;
+        }
+        
+        try {
+            switch (key) {
+                case "MANAGER":
+                    csi.setCsiManagerSOEID(value);
+                    break;
+                case "MANAGERGEID":
+                    csi.setCsiManagerGEID(parseLongSafe(value));
+                    break;
+                // ... other cases
+                default:
+                    log.debug("Unknown field: {} = {}", key, value);
+            }
+        } catch (Exception e) {
+            log.warn("Error setting field {} with value {}: {}", key, value, e.getMessage());
+        }
+    }
+    
+    private Long parseLongSafe(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            log.warn("Failed to parse long: {}", value);
+            return null;
+        }
+    }
+}
+
+
+// Add these fields to track scan progress
+
+@Document(collection = "FE_Inventory")
+public class FEInventoryReportNew {
+    // Existing fields...
+    
+    // Enhanced scan tracking
+    private ScanResult scanResult;
+    private Date lastScanAttempt;
+    private Integer scanRetryCount = 0;
+    private String ansibleJobId;
+    private Map<String, Object> scanMetadata;
+    
+    @Data
+    public static class ScanResult {
+        private String status; // SUCCESS, FAILED, IN_PROGRESS, NOT_STARTED
+        private Date scanDate;
+        private Integer certificatesFound = 0;
+        private List<String> errors = new ArrayList<>();
+        private Map<String, Object> scanDetails = new HashMap<>();
+    }
+}
+
+8. API Controllers
+8.1 CsiJobController.java
+
+   package com.citi.cert_management.controller;
+
+import com.citi.cert_management.entity.*;
+import com.citi.cert_management.service.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/csi-jobs")
+public class CsiJobController {
+    
+    @Autowired
+    private CsiJobOrchestrator jobOrchestrator;
+    
+    @Autowired
+    private CsiJobExecutionRepository jobExecutionRepository;
+    
+    @Autowired
+    private CsiReportGenerationService reportService;
+    
+    @PostMapping("/{csi}/initiate")
+    public ResponseEntity<Map<String, Object>> initiateJob(
+            @PathVariable Integer csi,
+            @RequestParam String triggeredBy) {
+        
+        String jobId = jobOrchestrator.initiateOnboardingJob(csi, triggeredBy);
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("jobId", jobId);
+        response.put("message", "Job initiated successfully");
+        
+        return ResponseEntity.ok(response);
+    }
+    
+    @GetMapping("/{jobId}/status")
+    public ResponseEntity<CsiJobExecution> getJobStatus(@PathVariable String jobId) {
+        CsiJobExecution job = jobExecutionRepository.findById(jobId)
+            .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
+        
+        return ResponseEntity.ok(job);
+    }
+    
+    @PostMapping("/{jobId}/generate-report")
+    public ResponseEntity<Map<String, Object>> generateReport(@PathVariable String jobId) {
+        CsiJobExecution job = jobExecutionRepository.findById(jobId)
+            .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
+        
+        CsiReport report = reportService.generateReportForJob(job);
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("reportId", report.getReportId());
+        response.put("message", "Report generated successfully");
+        
+        return ResponseEntity.ok(response);
+    }
+}
+
+Documentation Summary
+System Architecture
+
+Asynchronous Job Execution: Jobs are initiated and run asynchronously with proper state management
+Progress Tracking: Each step tracks its progress independently with retry logic
+Daily Report Generation: Reports are generated daily starting 2 days after job initiation
+Weekly Sync: Automatic weekly synchronization to keep data current
+Email Notifications: HTML email reports sent to configured recipients
+
+Key Features
+
+Parallel Execution: Steps 2.1, 2.2, and 2.3 run in parallel
+Dependency Management: Steps wait for their dependencies before execution
+Long-Running Job Support: Ansible jobs tracked separately with progress polling
+Comprehensive Reporting: Detailed reports with risk analysis and action items
+Scalable Architecture: Thread pool executors for concurrent job processing
+
+Usage Flow
+
+CSI Onboarding initiated via API or scheduler
+Job created with all steps initialized
+Phase 1 sync operations start in parallel
+Phase 2 operations scheduled based on dependencies
+Progress tracked continuously
+Reports generated daily after 2-day waiting period
+Weekly sync maintains data freshness
+
+
+
+
+1. Detailed Sequence Diagram
+
+   sequenceDiagram
+    participant User
+    participant API as CsiJobController
+    participant JO as CsiJobOrchestrator
+    participant JPT as JobProgressTracker
+    participant CAS as CasIntegrationService
+    participant Vault as VaultIntegrationService
+    participant BB as BitbucketIntegrationService
+    participant Ansible as AnsibleIntegrationService
+    participant Scan as CertificateScanningService
+    participant IA as ImpactAssessmentService
+    participant RGS as ReportGenerationService
+    participant Email as NotificationService
+    participant DB as MongoDB
+    participant Scheduler
+
+    %% Onboarding Initiation
+    User->>API: POST /api/csi-jobs/{csi}/initiate
+    API->>JO: initiateOnboardingJob(csi, triggeredBy)
+    JO->>DB: Create CsiJobExecution with all steps
+    JO->>DB: Update CsiDetails with jobId
+    JO-->>API: Return jobId
+    API-->>User: {success: true, jobId: xxx}
+
+    %% Async Job Execution
+    JO->>JO: executeJobAsync(jobId)
+    activate JO
+    
+    %% Phase 1: Parallel Sync Operations
+    par Server Sync
+        JO->>CAS: initiateServerSync(csi)
+        CAS-->>JO: syncJobId
+        JO->>DB: Update step with IN_PROGRESS
+        loop Poll for completion (30 attempts)
+            JO->>CAS: checkSyncStatus(syncJobId)
+            CAS-->>JO: status
+        end
+        JO->>CAS: getSyncResults(syncJobId)
+        CAS-->>JO: {serverCount, syncedServers, errors}
+        JO->>DB: Update step COMPLETED/PARTIALLY_COMPLETED
+    and Certificate Sync
+        JO->>Vault: syncCertificates(csi)
+        Vault-->>JO: {certificateCount, certificates, expiryInfo}
+        JO->>DB: Update step with results
+    and Repository Sync
+        JO->>BB: syncRepositories(csi, repos)
+        BB-->>JO: {repositoryCount, syncedRepos}
+        JO->>DB: Update step with results
+    end
+
+    %% Schedule Phase 2 Operations
+    JO->>JPT: scheduleStepExecution(jobId, ANSIBLE_CONNECTIVITY_TEST)
+    JO->>JPT: scheduleStepExecution(jobId, REPO_CERT_USAGE_SCAN)
+    JO->>DB: Enable report generation (start date = now + 2 days)
+    deactivate JO
+
+    %% JobProgressTracker Monitoring
+    loop Every 5 minutes
+        JPT->>DB: Check pending steps
+        JPT->>JPT: checkAndExecuteStep()
+        
+        %% Ansible Connectivity Test (depends on Server Sync)
+        alt Server Sync Completed
+            JPT->>JO: executeAnsibleConnectivityTest()
+            activate JO
+            JO->>DB: Get servers from inventory
+            JO->>Ansible: testConnectivity(servers)
+            Ansible-->>JO: {successfulServers, failedServers}
+            JO->>DB: Update step with results
+            
+            %% Schedule Server Scans
+            JO->>JPT: scheduleStepExecution(jobId, VM_CERT_SCAN)
+            JO->>JPT: scheduleStepExecution(jobId, WINDOWS_CERT_SCAN)
+            JO->>JPT: scheduleStepExecution(jobId, BCM_EXCEPTION_SCAN)
+            deactivate JO
+        end
+
+        %% Repository Scan (depends on Cert & Repo Sync)
+        alt Cert Sync and Repo Sync Completed
+            JPT->>JO: executeRepositoryScans()
+            activate JO
+            JO->>Scan: scanRepositoriesForCertUsage(csi)
+            Scan-->>JO: {certificatesInCode, locations}
+            JO->>DB: Update step with results
+            deactivate JO
+        end
+
+        %% Server Scans (depends on Ansible Test)
+        alt Ansible Test Completed
+            JPT->>JO: executeVmCertScan()
+            activate JO
+            JO->>Ansible: initiateVmCertScan(csi, vmServers)
+            Ansible-->>JO: ansibleJobId
+            JO->>DB: Update step with ansibleJobId
+            deactivate JO
+            
+            %% Similar for Windows and BCM scans
+        end
+    end
+
+    %% Ansible Job Progress Monitoring
+    loop Every 5 minutes
+        JPT->>DB: Find jobs with ansible tasks IN_PROGRESS
+        JPT->>Ansible: getJobStatus(ansibleJobId)
+        Ansible-->>JPT: {status, progress}
+        JPT->>DB: Update step progress
+    end
+
+    %% Impact Assessment (depends on all scans)
+    alt All Scans Completed
+        JPT->>IA: performImpactAssessment(csi, scanResults)
+        IA-->>JPT: {riskScore, findings, recommendations}
+        JPT->>DB: Update step with results
+    end
+
+    %% Daily Report Generation
+    Scheduler->>RGS: generateDailyReports() [Daily at 8 AM]
+    activate RGS
+    RGS->>DB: Find eligible jobs (reportGenerationEnabled && startDate < now)
+    
+    loop For each eligible job
+        RGS->>RGS: generateReportForJob(job)
+        RGS->>DB: Get job execution details
+        RGS->>DB: Get server inventory
+        RGS->>DB: Get certificates
+        RGS->>DB: Get BCM exceptions
+        RGS->>RGS: Calculate statistics
+        RGS->>RGS: Generate action items
+        RGS->>DB: Save CsiReport
+        RGS->>RGS: generateHtmlReport(report)
+        RGS->>Email: sendEmail(recipients, htmlContent)
+        Email-->>RGS: Email sent
+        RGS->>DB: Update CsiDetails with lastReportId
+    end
+    deactivate RGS
+
+    %% Weekly Sync
+    Scheduler->>Scheduler: weeklySync() [Sunday 2 AM]
+    Scheduler->>DB: Find active CSIs
+    loop For each CSI needing sync
+        Scheduler->>JO: initiateOnboardingJob(csi, "WEEKLY_SYNC")
+    end
+
+    %% User Check Status
+    User->>API: GET /api/csi-jobs/{jobId}/status
+    API->>DB: Find job by ID
+    DB-->>API: CsiJobExecution
+    API-->>User: Job details with step progress
+
+   2.1 Missing Entity Classes
+
+   // Certificate.java
+package com.citi.cert_management.entity;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+import java.util.Date;
+
+@Document(collection = "certificates")
+@Data
+public class Certificate {
+    @Id
+    private String id;
+    private Integer csi;
+    private String certificateName;
+    private String certificateType;
+    private Date expiryDate;
+    private String issuer;
+    private String subject;
+    private boolean isTrustStore;
+    private String environment;
+    private String serverId;
+    private String repositoryLocation;
+    private Date lastUpdated;
+}
+
+// BcmException.java
+package com.citi.cert_management.entity;
+
+import lombok.Data;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+import java.util.Date;
+
+@Document(collection = "bcm_exceptions")
+@Data
+public class BcmException {
+    @Id
+    private String id;
+    private Integer csi;
+    private String exceptionType;
+    private String severity; // CRITICAL, HIGH, MEDIUM, LOW
+    private String serverId;
+    private String description;
+    private Date detectedDate;
+    private String status;
+    private String remediationAction;
+}
+
+// StepProgress.java (for report)
+package com.citi.cert_management.dto;
+
+import lombok.Data;
+import java.util.Date;
+
+@Data
+public class StepProgress {
+    private String stepType;
+    private String status;
+    private Integer progress;
+    private String message;
+    private Date startTime;
+    private Date endTime;
+}
+
+2.2 Missing Repository Classes
+
+// CertificateRepository.java
+package com.citi.cert_management.repository;
+
+import com.citi.cert_management.entity.Certificate;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+import java.util.List;
+
+@Repository
+public interface CertificateRepository extends MongoRepository<Certificate, String> {
+    List<Certificate> findByCsi(Integer csi);
+    List<Certificate> findByCsiAndEnvironment(Integer csi, String environment);
+}
+
+// BcmExceptionRepository.java
+package com.citi.cert_management.repository;
+
+import com.citi.cert_management.entity.BcmException;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+import java.util.List;
+
+@Repository
+public interface BcmExceptionRepository extends MongoRepository<BcmException, String> {
+    List<BcmException> findByCsi(Integer csi);
+    List<BcmException> findByCsiAndSeverity(Integer csi, String severity);
+}
+
+// CsiReportRepository.java
+package com.citi.cert_management.repository;
+
+import com.citi.cert_management.entity.CsiReport;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+import java.util.Date;
+
+@Repository
+public interface CsiReportRepository extends MongoRepository<CsiReport, String> {
+    CsiReport findTopByCsiOrderByGeneratedAtDesc(Integer csi);
+    int deleteByGeneratedAtBefore(Date date);
+}
+
+// FEInventoryReportNewRepository.java
+package com.citi.cert_management.repository;
+
+import com.citi.cert_management.entity.FEInventoryReportNew;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.stereotype.Repository;
+import java.util.List;
+
+@Repository
+public interface FEInventoryReportNewRepository extends MongoRepository<FEInventoryReportNew, String> {
+    List<FEInventoryReportNew> findByCsi(Integer csi);
+    List<FEInventoryReportNew> findByCsiAndServerType(Integer csi, String serverType);
+}
+
+2.3 Missing Service Implementations
+
+// BitbucketIntegrationService.java
+package com.citi.cert_management.service;
+
+import org.springframework.stereotype.Service;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public interface BitbucketIntegrationService {
+    Map<String, Object> syncRepositories(Integer csi, List<String> repositories);
+    Map<String, Object> scanRepositoryForCertificates(String repositoryUrl);
+}
+
+// CertificateScanningService.java
+package com.citi.cert_management.service;
+
+import org.springframework.stereotype.Service;
+import java.util.Map;
+
+@Service
+public interface CertificateScanningService {
+    Map<String, Object> scanRepositoriesForCertUsage(Integer csi);
+    Map<String, Object> analyzeCertificateUsage(String certificateId, List<String> repositories);
+}
+
+// ImpactAssessmentService.java
+package com.citi.cert_management.service;
+
+import org.springframework.stereotype.Service;
+import java.util.Map;
+
+@Service
+public interface ImpactAssessmentService {
+    Map<String, Object> performImpactAssessment(Integer csi, Map<String, Object> scanResults);
+    Map<String, Object> calculateRiskScore(Integer csi);
+}
+
+// NotificationService.java
+package com.citi.cert_management.service;
+
+import org.springframework.stereotype.Service;
+import java.util.Map;
+
+@Service
+public interface NotificationService {
+    void sendEmail(Map<String, Object> emailData);
+    void sendAlert(String recipient, String message, String priority);
+}
+
+4. Expected Result Formats for Each Step
+Each step should return results in a specific format for proper report generation:
+4.1 Server Sync (CAS Integration)
+
+   // Expected result format from CasIntegrationService.getSyncResults()
+{
+    "serverCount": 150,
+    "syncedServers": 148,
+    "failedServers": 2,
+    "serverTypes": {
+        "VM": 100,
+        "WINDOWS": 45,
+        "CONTAINER": 5
+    },
+    "errors": [
+        "Server XYZ123: Connection timeout",
+        "Server ABC456: Authentication failed"
+    ],
+    "syncDuration": 3600000, // milliseconds
+    "dataSource": "CAS"
+}
+
+4.2 Certificate Sync (Vault Integration)
+
+
+// Expected result format from VaultIntegrationService.syncCertificates()
+{
+    "certificateCount": 250,
+    "certificates": [
+        {
+            "certificateId": "cert123",
+            "name": "app.example.com",
+            "expiryDate": "2025-12-31T23:59:59Z",
+            "daysUntilExpiry": 90,
+            "type": "SSL",
+            "environment": "PROD"
+        }
+    ],
+    "expiryBreakdown": {
+        "expired": 5,
+        "expiringIn30Days": 12,
+        "expiringIn60Days": 25,
+        "expiringIn90Days": 40
+    },
+    "trustStoreCerts": 15,
+    "syncDuration": 45000
+}
+
+4.3 Repository Sync
+
+// Expected result format from BitbucketIntegrationService.syncRepositories()
+{
+    "repositoryCount": 25,
+    "syncedRepositories": 24,
+    "failedRepositories": 1,
+    "repositoryTypes": {
+        "bitbucket": 20,
+        "github": 5
+    },
+    "branches": {
+        "master": 25,
+        "develop": 20,
+        "feature": 45
+    },
+    "errors": ["repo123: Access denied"],
+    "syncDuration": 120000
+}
+
+4.4 Ansible Connectivity Test
+
+// Expected result format from AnsibleIntegrationService.testConnectivity()
+{
+    "totalServers": 150,
+    "successfulConnections": 145,
+    "failedConnections": 5,
+    "successfulServers": [
+        {"serverId": "srv001", "hostname": "app01.example.com", "type": "VM"},
+        // ... more servers
+    ],
+    "failedServers": [
+        {
+            "serverId": "srv100",
+            "hostname": "db01.example.com",
+            "error": "SSH timeout",
+            "retryable": true
+        }
+    ],
+    "avgConnectionTime": 2500 // milliseconds
+}
+
+4.5 VM/Windows Certificate Scan
+
+// Expected result format from scan operations
+{
+    "scannedServers": 100,
+    "successfulScans": 98,
+    "failedScans": 2,
+    "certificatesFound": 450,
+    "certificatesByType": {
+        "SSL": 300,
+        "CODE_SIGNING": 50,
+        "CA": 100
+    },
+    "certificatesByLocation": {
+        "/etc/ssl/certs": 200,
+        "Java Keystore": 150,
+        "Windows Store": 100
+    },
+    "ansibleJobId": "job_2025_001",
+    "scanDuration": 7200000,
+    "errors": ["srv050: Certificate store access denied"]
+}
+
+4.6 Repository Certificate Usage Scan
+
+// Expected result format from CertificateScanningService.scanRepositoriesForCertUsage()
+{
+    "scannedRepositories": 24,
+    "certificatesInCode": 15,
+    "certificateLocations": [
+        {
+            "repository": "app-repo",
+            "branch": "master",
+            "file": "src/main/resources/cert.pem",
+            "lineNumber": 1,
+            "certificateType": "PEM",
+            "lastModified": "2025-01-15T10:30:00Z"
+        }
+    ],
+    "hardcodedPasswords": 3,
+    "privateKeysFound": 2,
+    "scanDuration": 180000
+}
+
+4.7 BCM Exception Scan
+
+// Expected result format for BCM scanning
+{
+    "totalExceptions": 45,
+    "criticalExceptions": 5,
+    "highExceptions": 12,
+    "mediumExceptions": 20,
+    "lowExceptions": 8,
+    "exceptionsByType": {
+        "MISSING_PATCH": 15,
+        "WEAK_CIPHER": 10,
+        "OUTDATED_SSL": 8,
+        "INSECURE_PROTOCOL": 12
+    },
+    "remediationRequired": 25,
+    "autoRemediatable": 15
+}
+
+4.8 Impact Assessment
+
+// Expected result format from ImpactAssessmentService.performImpactAssessment()
+{
+    "overallRiskScore": 75, // 0-100
+    "riskLevel": "HIGH",
+    "criticalFindings": [
+        {
+            "type": "EXPIRED_CERT_IN_PROD",
+            "count": 3,
+            "impact": "Service unavailability",
+            "recommendation": "Immediate renewal required"
+        }
+    ],
+    "recommendations": [
+        {
+            "priority": "HIGH",
+            "action": "Renew 3 expired certificates",
+            "deadline": "2025-01-20"
+        },
+        {
+            "priority": "MEDIUM",
+            "action": "Update 15 certificates expiring in 30 days",
+            "deadline": "2025-02-15"
+        }
+    ],
+    "complianceStatus": {
+        "compliant": false,
+        "violations": ["CERT_EXPIRY_POLICY", "BCM_THRESHOLD"]
+    }
+}
+
+4.9 Standardized Result Storage
+To ensure consistency, implement a result wrapper:
+
+@Data
+public class StepResult {
+    private boolean success;
+    private String status; // SUCCESS, PARTIAL_SUCCESS, FAILURE
+    private Map<String, Object> data;
+    private List<String> errors;
+    private List<String> warnings;
+    private Long duration; // milliseconds
+    private Date timestamp;
+    
+    public static StepResult success(Map<String, Object> data) {
+        StepResult result = new StepResult();
+        result.setSuccess(true);
+        result.setStatus("SUCCESS");
+        result.setData(data);
+        result.setTimestamp(new Date());
+        return result;
+    }
+    
+    public static StepResult failure(String error) {
+        StepResult result = new StepResult();
+        result.setSuccess(false);
+        result.setStatus("FAILURE");
+        result.setErrors(Arrays.asList(error));
+        result.setTimestamp(new Date());
+        return result;
+    }
+}
 
